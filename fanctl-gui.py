@@ -140,7 +140,7 @@ class FanController(QObject):
         self.start_control()
 
         if cpu == gpu:
-            self.status_changed.emit(f"Manuel - {cpu}%")
+            self.status_changed.emit(f"Manual - {cpu}%")
         else:
             self.status_changed.emit(f"CPU:{cpu}% GPU:{gpu}%")
 
@@ -148,13 +148,13 @@ class FanController(QObject):
         self.mode = "profile"
         self.profile_name = profile_name
         self.start_control()
-        self.status_changed.emit(f"{profile_name} - En attente...")
+        self.status_changed.emit(f"{profile_name} - Waiting...")
 
     def set_auto(self):
         self.mode = "auto"
         self.disable_manual()
         self.run_cmd("echo 1 | sudo tee /sys/devices/platform/h5600_fan/thermal_policy > /dev/null 2>&1")
-        self.status_changed.emit("Automatique (EC)")
+        self.status_changed.emit("Automatic (EC)")
 
     def stop(self):
         self.running = False
@@ -212,7 +212,7 @@ class FanControlGUI(QMainWindow):
         layout.addWidget(temp_group)
 
         # Status
-        self.status_label = QLabel("Mode: Automatique")
+        self.status_label = QLabel("Mode: Automatic")
         self.status_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
         self.status_label.setStyleSheet("color: #0066cc;")
         layout.addWidget(self.status_label)
@@ -225,17 +225,17 @@ class FanControlGUI(QMainWindow):
         profile_tab = QWidget()
         profile_layout = QVBoxLayout(profile_tab)
 
-        profile_desc = QLabel("Ajustement automatique selon la temperature:")
+        profile_desc = QLabel("Automatic adjustment based on temperature:")
         profile_layout.addWidget(profile_desc)
 
         # Profile buttons
         profile_grid = QGridLayout()
         profiles = [
-            ("Silent", "0% <60°C\nTres silencieux"),
-            ("Quiet", "0% <60°C\nSilencieux"),
-            ("Balanced", "0% <60°C\nEquilibre"),
-            ("Performance", "15% min\nPerformant"),
-            ("Turbo", "15% min\nMaximum"),
+            ("Silent", "0% <60°C\nVery quiet"),
+            ("Quiet", "0% <60°C\nQuiet"),
+            ("Balanced", "0% <60°C\nBalanced"),
+            ("Performance", "15% min\nHigh performance"),
+            ("Turbo", "15% min\nMaximum cooling"),
         ]
         for i, (name, desc) in enumerate(profiles):
             btn = QPushButton(f"{name}\n{desc}")
@@ -251,7 +251,7 @@ class FanControlGUI(QMainWindow):
         profile_layout.addWidget(self.curve_label)
 
         profile_layout.addStretch()
-        tabs.addTab(profile_tab, "Profils Auto")
+        tabs.addTab(profile_tab, "Auto Profiles")
 
         # Tab 2: Manual control
         manual_tab = QWidget()
@@ -266,7 +266,7 @@ class FanControlGUI(QMainWindow):
         manual_layout.addLayout(presets_layout)
 
         # Link checkbox
-        self.link_check = QCheckBox("Lier les ventilateurs")
+        self.link_check = QCheckBox("Link fans")
         self.link_check.setChecked(True)
         self.link_check.stateChanged.connect(self.on_link_changed)
         manual_layout.addWidget(self.link_check)
@@ -297,20 +297,20 @@ class FanControlGUI(QMainWindow):
         gpu_layout.addWidget(self.gpu_slider)
         manual_layout.addLayout(gpu_layout)
 
-        apply_btn = QPushButton("Appliquer")
+        apply_btn = QPushButton("Apply")
         apply_btn.clicked.connect(self.apply_individual)
         manual_layout.addWidget(apply_btn)
 
         manual_layout.addStretch()
-        tabs.addTab(manual_tab, "Manuel")
+        tabs.addTab(manual_tab, "Manual")
 
         # Tab 3: EC Auto
         auto_tab = QWidget()
         auto_layout = QVBoxLayout(auto_tab)
-        auto_desc = QLabel("Laisser le controleur embarque (EC) gerer les ventilateurs.\n\n"
-                          "C'est le mode par defaut du BIOS.")
+        auto_desc = QLabel("Let the Embedded Controller (EC) manage the fans.\n\n"
+                          "This is the default BIOS mode.")
         auto_layout.addWidget(auto_desc)
-        auto_btn = QPushButton("Activer Mode Auto EC")
+        auto_btn = QPushButton("Enable EC Auto Mode")
         auto_btn.clicked.connect(self.on_auto_mode)
         auto_layout.addWidget(auto_btn)
         auto_layout.addStretch()
@@ -331,7 +331,7 @@ class FanControlGUI(QMainWindow):
         self.check_boost()
 
         # Warning
-        warning = QLabel("Mode SILENT = surveillez les temperatures!")
+        warning = QLabel("SILENT mode = monitor your temperatures!")
         warning.setStyleSheet("color: orange;")
         layout.addWidget(warning)
 
@@ -354,7 +354,7 @@ class FanControlGUI(QMainWindow):
 
         tray_menu = QMenu()
 
-        show_action = QAction("Afficher", self)
+        show_action = QAction("Show", self)
         show_action.triggered.connect(self.show_window)
         tray_menu.addAction(show_action)
 
@@ -384,7 +384,7 @@ class FanControlGUI(QMainWindow):
 
         tray_menu.addSeparator()
 
-        quit_action = QAction("Quitter", self)
+        quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.quit_app)
         tray_menu.addAction(quit_action)
 
@@ -448,7 +448,7 @@ class FanControlGUI(QMainWindow):
     def set_profile(self, name):
         curve = PROFILES.get(name, [])
         curve_str = " | ".join([f"{t}°C:{f}%" for t, f in curve])
-        self.curve_label.setText(f"Courbe: {curve_str}")
+        self.curve_label.setText(f"Curve: {curve_str}")
         threading.Thread(target=self.controller.set_profile, args=(name,), daemon=True).start()
 
     def set_preset(self, percent):
