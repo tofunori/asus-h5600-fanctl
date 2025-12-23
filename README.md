@@ -21,8 +21,7 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 ## Requirements
 
 - Linux kernel with `acpi_call` module
-- Python 3 with tkinter (for GUI)
-- pystray and pillow (for system tray - optional)
+- Python 3 with PyQt5 (for GUI)
 - sudo access
 
 ## Installation
@@ -31,16 +30,13 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 
 ```bash
 # Fedora
-sudo dnf install akmod-acpi_call python3-tkinter
-pip3 install pystray pillow
+sudo dnf install akmod-acpi_call python3-qt5
 
 # Ubuntu/Debian
-sudo apt install acpi-call-dkms python3-tk python3-pil
-pip3 install pystray
+sudo apt install acpi-call-dkms python3-pyqt5
 
 # Arch
-sudo pacman -S acpi_call python-pillow
-pip install pystray
+sudo pacman -S acpi_call python-pyqt5
 ```
 
 ### 2. Load the module (and auto-load at boot)
