@@ -3,17 +3,39 @@
 # Controls BOTH fans (CPU + GPU)
 # NOTE: EC regains control after ~1-2s, use 'maintain' to keep control
 
-# Find hwmon path by sensor name (e.g., 'k10temp', 'amdgpu')
+# Find hwmon path by sensor name (tries multiple names)
 find_hwmon() {
-    local sensor_name=$1
-    for hwmon in /sys/class/hwmon/hwmon*; do
-        if [ -f "$hwmon/name" ]; then
-            if [ "$(cat "$hwmon/name" 2>/dev/null)" = "$sensor_name" ]; then
-                echo "$hwmon/temp1_input"
-                return 0
+    for sensor_name in "$@"; do
+        for hwmon in /sys/class/hwmon/hwmon*; do
+            if [ -f "$hwmon/name" ]; then
+                if [ "$(cat "$hwmon/name" 2>/dev/null)" = "$sensor_name" ]; then
+                    echo "$hwmon/temp1_input"
+                    return 0
+                fi
             fi
-        fi
+        done
     done
+    return 1
+}
+
+# Find sensor with fallback to hardcoded path
+find_sensor_with_fallback() {
+    local fallback_path=$1
+    shift  # Remove first arg, rest are sensor names
+
+    # Try auto-detection first
+    local path=$(find_hwmon "$@")
+    if [ -n "$path" ] && [ -f "$path" ]; then
+        echo "$path"
+        return 0
+    fi
+
+    # Fallback to hardcoded path
+    if [ -f "$fallback_path" ]; then
+        echo "$fallback_path"
+        return 0
+    fi
+
     return 1
 }
 
@@ -108,22 +130,22 @@ case "$1" in
         ;;
     status)
         echo "=== Temperatures ==="
-        # Auto-detect sensors by name
-        cpu_hwmon=$(find_hwmon "k10temp")
-        gpu_hwmon=$(find_hwmon "amdgpu")
+        # Auto-detect sensors with fallback to hardcoded paths
+        cpu_hwmon=$(find_sensor_with_fallback "/sys/class/hwmon/hwmon6/temp1_input" "k10temp" "zenpower" "coretemp")
+        gpu_hwmon=$(find_sensor_with_fallback "/sys/class/hwmon/hwmon5/temp1_input" "amdgpu" "nvidia")
 
         if [ -n "$cpu_hwmon" ]; then
             cpu_temp=$(cat "$cpu_hwmon" 2>/dev/null)
             [ -n "$cpu_temp" ] && echo "CPU: $((cpu_temp/1000))°C"
         else
-            echo "CPU: sensor not found (k10temp)"
+            echo "CPU: sensor not found"
         fi
 
         if [ -n "$gpu_hwmon" ]; then
             gpu_temp=$(cat "$gpu_hwmon" 2>/dev/null)
             [ -n "$gpu_temp" ] && echo "GPU: $((gpu_temp/1000))°C"
         else
-            echo "GPU: sensor not found (amdgpu)"
+            echo "GPU: sensor not found"
         fi
         ;;
     *)

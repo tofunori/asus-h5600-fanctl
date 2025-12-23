@@ -38,19 +38,50 @@ PROFILES = {
 }
 
 
-def find_hwmon_by_name(sensor_name):
+import os
+
+def find_hwmon_by_name(sensor_names):
     """Find hwmon path by sensor name (e.g., 'k10temp', 'amdgpu')
+
+    Args:
+        sensor_names: A single name or list of names to try (in order)
 
     Returns the path to temp1_input file, or None if not found.
     """
-    for hwmon_path in glob.glob('/sys/class/hwmon/hwmon*'):
-        try:
-            with open(f'{hwmon_path}/name', 'r') as f:
-                if f.read().strip() == sensor_name:
-                    return f'{hwmon_path}/temp1_input'
-        except (IOError, OSError):
-            continue
+    if isinstance(sensor_names, str):
+        sensor_names = [sensor_names]
+
+    for sensor_name in sensor_names:
+        for hwmon_path in glob.glob('/sys/class/hwmon/hwmon*'):
+            try:
+                with open(f'{hwmon_path}/name', 'r') as f:
+                    if f.read().strip() == sensor_name:
+                        return f'{hwmon_path}/temp1_input'
+            except (IOError, OSError):
+                continue
     return None
+
+
+def find_temp_sensor(sensor_names, fallback_path):
+    """Find temperature sensor with fallback support.
+
+    Args:
+        sensor_names: List of sensor names to try (e.g., ['k10temp', 'zenpower'])
+        fallback_path: Hardcoded path to try if auto-detection fails
+
+    Returns:
+        Tuple of (path, method) where method is 'auto', 'fallback', or None
+    """
+    # Try auto-detection first
+    path = find_hwmon_by_name(sensor_names)
+    if path and os.path.exists(path):
+        return path, 'auto'
+
+    # Fallback to hardcoded path
+    if os.path.exists(fallback_path):
+        return fallback_path, 'fallback'
+
+    return None, None
 
 
 class FanController(QObject):
@@ -69,20 +100,28 @@ class FanController(QObject):
         self.gpu_temp = 0
         self.control_thread = None
 
-        # Auto-detect temperature sensors
-        self.cpu_temp_path = find_hwmon_by_name('k10temp')  # AMD Ryzen CPU
-        self.gpu_temp_path = find_hwmon_by_name('amdgpu')   # AMD GPU
+        # Auto-detect temperature sensors with fallback
+        # CPU: try k10temp (AMD Ryzen), zenpower, coretemp (Intel)
+        self.cpu_temp_path, cpu_method = find_temp_sensor(
+            ['k10temp', 'zenpower', 'coretemp'],
+            '/sys/class/hwmon/hwmon6/temp1_input'
+        )
+        # GPU: try amdgpu, nvidia
+        self.gpu_temp_path, gpu_method = find_temp_sensor(
+            ['amdgpu', 'nvidia'],
+            '/sys/class/hwmon/hwmon5/temp1_input'
+        )
 
         # Log detection results
         if self.cpu_temp_path:
-            print(f"CPU sensor found: {self.cpu_temp_path}")
+            print(f"CPU sensor found ({cpu_method}): {self.cpu_temp_path}")
         else:
-            print("WARNING: CPU sensor (k10temp) not found!")
+            print("WARNING: CPU sensor not found!")
 
         if self.gpu_temp_path:
-            print(f"GPU sensor found: {self.gpu_temp_path}")
+            print(f"GPU sensor found ({gpu_method}): {self.gpu_temp_path}")
         else:
-            print("WARNING: GPU sensor (amdgpu) not found!")
+            print("WARNING: GPU sensor not found!")
 
     def run_cmd(self, cmd):
         try:
