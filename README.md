@@ -5,10 +5,13 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 ## Features
 
 - **Manual fan control** - Set fan speed from 10% to 100%
+- **Separate CPU/GPU control** - Control each fan independently
 - **Preset modes** - Turbo, Performance, Balanced, Quiet, Silent
 - **CPU Boost toggle** - Enable/disable AMD CPU boost
+- **System tray support** - Minimize to tray, quick access menu
+- **Temperature display** - Real-time CPU and GPU temperatures
 - **GUI and CLI** - Both graphical and command-line interfaces
-- **Both fans supported** - Controls CPU fan (left) and GPU fan (right)
+- **Aggressive maintain loop** - Prevents EC from overriding your settings
 
 ## Supported Hardware
 
@@ -19,32 +22,40 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 
 - Linux kernel with `acpi_call` module
 - Python 3 with tkinter (for GUI)
+- pystray and pillow (for system tray - optional)
 - sudo access
 
 ## Installation
 
-### 1. Install acpi_call module
+### 1. Install dependencies
 
 ```bash
 # Fedora
-sudo dnf install akmod-acpi_call
+sudo dnf install akmod-acpi_call python3-tkinter
+pip3 install pystray pillow
 
 # Ubuntu/Debian
-sudo apt install acpi-call-dkms
+sudo apt install acpi-call-dkms python3-tk python3-pil
+pip3 install pystray
 
 # Arch
-sudo pacman -S acpi_call
+sudo pacman -S acpi_call python-pillow
+pip install pystray
 ```
 
-### 2. Load the module
+### 2. Load the module (and auto-load at boot)
 
 ```bash
 sudo modprobe acpi_call
+echo "acpi_call" | sudo tee /etc/modules-load.d/acpi_call.conf
 ```
 
 ### 3. Install fan control scripts
 
 ```bash
+git clone https://github.com/tofunori/asus-h5600-fanctl.git
+cd asus-h5600-fanctl
+
 # CLI tool
 sudo cp fanctl.sh /usr/local/bin/fanctl
 sudo chmod +x /usr/local/bin/fanctl
@@ -54,38 +65,62 @@ sudo cp fanctl-gui.py /usr/local/bin/fanctl-gui
 sudo chmod +x /usr/local/bin/fanctl-gui
 ```
 
+### 4. (Optional) Add desktop entry and autostart
+
+```bash
+# Desktop entry for KDE/GNOME menu
+sudo tee /usr/share/applications/fanctl-gui.desktop << 'EOF'
+[Desktop Entry]
+Name=ASUS Fan Control
+Comment=Control CPU and GPU fans on ASUS ProArt H5600QM
+Exec=pkexec /usr/local/bin/fanctl-gui
+Icon=preferences-system-power
+Terminal=false
+Type=Application
+Categories=System;Settings;HardwareSettings;
+EOF
+
+# Autostart at login (optional)
+mkdir -p ~/.config/autostart
+cp /usr/share/applications/fanctl-gui.desktop ~/.config/autostart/
+```
+
 ## Usage
 
 ### Command Line (fanctl)
 
 ```bash
-fanctl max       # Fans 100%
-fanctl perf      # Fans 80%
-fanctl balanced  # Fans 50%
-fanctl quiet     # Fans 30%
-fanctl silent    # Fans minimum (~12%)
-fanctl set 60    # Fans at 60%
-fanctl auto      # Return to automatic control
-fanctl status    # Show current fan speed
+fanctl max          # Fans 100%
+fanctl perf         # Fans 80%
+fanctl balanced     # Fans 50%
+fanctl quiet        # Fans 30%
+fanctl silent       # Fans minimum (~12%)
+fanctl set 60       # Both fans at 60%
+fanctl set 30 80    # CPU 30%, GPU 80%
+fanctl maintain 50  # Maintain at 50% (continuous loop)
+fanctl auto         # Return to automatic control
+fanctl status       # Show temperatures
 ```
 
 ### GUI
 
 ```bash
 sudo fanctl-gui
-# or
-sudo python3 fanctl-gui.py
+# or from KDE menu: "ASUS Fan Control"
 ```
+
+**GUI Features:**
+- Minimize to system tray (click X or "Minimiser" button)
+- Right-click tray icon for quick presets
+- Double-click tray icon to show window
+- Separate sliders for CPU and GPU fans
+- Link/unlink fans for individual control
 
 ## How It Works
 
-This tool uses ACPI calls to communicate directly with the ASUS EC (Embedded Controller):
+This tool uses ACPI calls to communicate directly with the ASUS EC (Embedded Controller).
 
-1. **Enable manual mode**: `\_SB.ATKD.CWAP 0x00110013 1` (CPU) and `0x00110014 1` (GPU)
-2. **Set fan speed**: `\_SB.PCI0.SBRG.EC0.ST84 <fan> <speed>` where fan is 0 (CPU) or 1 (GPU)
-3. **Return to auto**: Disable manual mode and set thermal policy
-
-## Technical Details
+**Important:** The EC tries to regain control every ~1-2 seconds. The GUI uses an aggressive maintain loop (every 0.1s) to keep your settings. For CLI, use `fanctl maintain` for continuous control.
 
 ### ACPI Methods Used
 
@@ -108,7 +143,7 @@ This tool uses ACPI calls to communicate directly with the ASUS EC (Embedded Con
 
 ## Warning
 
-⚠️ **Use at your own risk!** Setting fans too low while under heavy load can cause overheating. Monitor your temperatures when using Silent mode.
+**Use at your own risk!** Setting fans too low while under heavy load can cause overheating. Monitor your temperatures when using Silent mode.
 
 ## License
 
