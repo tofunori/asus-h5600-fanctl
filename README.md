@@ -69,20 +69,11 @@ sudo cp org.fanctl.policy /usr/share/polkit-1/actions/
 
 ```bash
 # Desktop entry for KDE/GNOME menu
-sudo tee /usr/share/applications/fanctl-gui.desktop << 'EOF'
-[Desktop Entry]
-Name=ASUS Fan Control
-Comment=Control CPU and GPU fans on ASUS ProArt H5600QM
-Exec=pkexec /usr/local/bin/fanctl-gui
-Icon=preferences-system-power
-Terminal=false
-Type=Application
-Categories=System;Settings;HardwareSettings;
-EOF
+sudo cp fanctl-gui.desktop /usr/share/applications/
 
 # Autostart at login (optional)
 mkdir -p ~/.config/autostart
-cp /usr/share/applications/fanctl-gui.desktop ~/.config/autostart/
+cp fanctl-gui.desktop ~/.config/autostart/
 ```
 
 ## Usage

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=ASUS Fan Control
+Comment=Control CPU and GPU fans on ASUS ProArt H5600QM
+Exec=pkexec /usr/local/bin/fanctl-gui
+Icon=preferences-system-power
+Terminal=false
+Type=Application
+Categories=System;Settings;HardwareSettings;
