@@ -4,9 +4,10 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 
 ## Features
 
+- **Automatic fan profiles** - Temperature-based fan curves (like ASUS ProArt Creator Hub)
 - **Manual fan control** - Set fan speed from 10% to 100%
 - **Separate CPU/GPU control** - Control each fan independently
-- **Preset modes** - Turbo, Performance, Balanced, Quiet, Silent
+- **5 preset profiles** - Silent, Quiet, Balanced, Performance, Turbo
 - **CPU Boost toggle** - Enable/disable AMD CPU boost
 - **System tray support** - Minimize to tray, quick access menu
 - **Temperature display** - Real-time CPU and GPU temperatures
@@ -111,6 +112,23 @@ sudo fanctl-gui
 - Double-click tray icon to show window
 - Separate sliders for CPU and GPU fans
 - Link/unlink fans for individual control
+
+### Automatic Fan Profiles
+
+The GUI includes temperature-based automatic profiles similar to ASUS ProArt Creator Hub:
+
+| Profile | <60°C | 65°C | 70°C | 80°C | 90°C |
+|---------|-------|------|------|------|------|
+| **Silent** | 0% | 20% | 35% | 55% | 100% |
+| **Quiet** | 0% | 25% | 40% | 65% | 100% |
+| **Balanced** | 0% | 30% | 50% | 75% | 100% |
+| **Performance** | 15% | 40% | 60% | 85% | 100% |
+| **Turbo** | 15% | 50% | 75% | 100% | 100% |
+
+- **Silent/Quiet/Balanced**: Fans stay at 0% until 60°C (like official "Whisper mode")
+- **Performance/Turbo**: 15% minimum for sustained workloads
+- Fan speed is interpolated linearly between temperature thresholds
+- Uses the higher temperature between CPU and GPU
 
 ## How It Works
 
