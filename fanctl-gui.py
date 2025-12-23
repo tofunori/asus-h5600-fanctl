@@ -1,347 +1,29 @@
 #!/usr/bin/env python3
 """
-ASUS ProArt H5600QM Fan Control GUI - With System Tray Support
+ASUS ProArt H5600QM Fan Control GUI - PyQt5 System Tray for KDE
 """
-import tkinter as tk
-from tkinter import ttk
+import sys
 import subprocess
 import threading
 import time
 
-# System tray support
-try:
-    import pystray
-    from PIL import Image, ImageDraw
-    TRAY_AVAILABLE = True
-except ImportError:
-    TRAY_AVAILABLE = False
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox,
+                             QGroupBox, QRadioButton, QSystemTrayIcon, QMenu, QAction)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 
-class FanControlGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("ASUS Fan Control")
-        self.root.geometry("500x900")
-        self.root.resizable(True, True)
-        self.root.minsize(450, 800)
+class FanController(QObject):
+    """Handles fan control in background thread"""
+    status_changed = pyqtSignal(str)
 
-        # Manual mode state
-        self.manual_mode_active = False
-        self.cpu_fan_percent = 50
-        self.gpu_fan_percent = 50
-        self.fans_linked = True
-        self.fan_maintain_thread = None
-
-        # System tray
-        self.tray_icon = None
-        self.window_visible = True
-
-        # Light mode colors
-        self.colors = {
-            'bg': '#f5f5f5',
-            'card': '#ffffff',
-            'card_border': '#d0d0d0',
-            'accent': '#0066cc',
-            'text': '#1a1a1a',
-            'text_dim': '#555555',
-            'danger': '#cc0000',
-            'warning': '#cc7700',
-            'success': '#008800',
-            'purple': '#7733aa',
-        }
-
-        self.root.configure(bg=self.colors['bg'])
-
-        # Configure styles
-        style = ttk.Style()
-        style.theme_use('clam')
-
-        style.configure('TFrame', background=self.colors['bg'])
-        style.configure('Card.TFrame', background=self.colors['card'])
-        style.configure('TLabel', background=self.colors['bg'], foreground=self.colors['text'], font=('Segoe UI', 11))
-        style.configure('Header.TLabel', font=('Segoe UI', 20, 'bold'), foreground=self.colors['text'])
-        style.configure('Sub.TLabel', foreground=self.colors['text_dim'], font=('Segoe UI', 10))
-        style.configure('Status.TLabel', foreground=self.colors['accent'], font=('Segoe UI', 11, 'bold'))
-        style.configure('Temp.TLabel', font=('Segoe UI', 18, 'bold'))
-        style.configure('TempLabel.TLabel', font=('Segoe UI', 10), foreground=self.colors['text_dim'])
-
-        style.configure('TButton', font=('Segoe UI', 10), padding=8, background=self.colors['card'])
-        style.map('TButton', background=[('active', self.colors['accent'])])
-
-        style.configure('TLabelframe', background=self.colors['card'], bordercolor=self.colors['card_border'])
-        style.configure('TLabelframe.Label', background=self.colors['card'], foreground=self.colors['accent'], font=('Segoe UI', 10, 'bold'))
-
-        style.configure('TRadiobutton', background=self.colors['card'], foreground=self.colors['text'], font=('Segoe UI', 10))
-        style.configure('TCheckbutton', background=self.colors['card'], foreground=self.colors['text'], font=('Segoe UI', 10))
-        style.configure('Horizontal.TScale', background=self.colors['card'], troughcolor=self.colors['card_border'])
-
-        # Main container
-        main = ttk.Frame(root, padding=15)
-        main.pack(fill='both', expand=True)
-
-        # Header with minimize button
-        header_frame = ttk.Frame(main)
-        header_frame.pack(fill='x', pady=(0, 5))
-
-        ttk.Label(header_frame, text="ASUS Fan Control", style='Header.TLabel').pack(side='left')
-
-        if TRAY_AVAILABLE:
-            ttk.Button(header_frame, text="Minimiser", command=self.minimize_to_tray).pack(side='right')
-
-        # Subtitle
-        ttk.Label(main, text="ProArt StudioBook H5600QM", style='Sub.TLabel').pack(anchor='w')
-
-        # Temperature display
-        temp_frame = ttk.LabelFrame(main, text="Temperatures", padding=10)
-        temp_frame.pack(fill='x', pady=8)
-
-        temp_inner = ttk.Frame(temp_frame)
-        temp_inner.pack(fill='x')
-
-        # CPU Temp
-        cpu_temp_frame = ttk.Frame(temp_inner)
-        cpu_temp_frame.pack(side='left', expand=True, fill='x')
-        ttk.Label(cpu_temp_frame, text="CPU", style='TempLabel.TLabel').pack()
-        self.cpu_temp_var = tk.StringVar(value="--C")
-        self.cpu_temp_label = ttk.Label(cpu_temp_frame, textvariable=self.cpu_temp_var, style='Temp.TLabel')
-        self.cpu_temp_label.pack()
-
-        # GPU Temp
-        gpu_temp_frame = ttk.Frame(temp_inner)
-        gpu_temp_frame.pack(side='left', expand=True, fill='x')
-        ttk.Label(gpu_temp_frame, text="GPU", style='TempLabel.TLabel').pack()
-        self.gpu_temp_var = tk.StringVar(value="--C")
-        self.gpu_temp_label = ttk.Label(gpu_temp_frame, textvariable=self.gpu_temp_var, style='Temp.TLabel')
-        self.gpu_temp_label.pack()
-
-        # Status
-        self.status_var = tk.StringVar(value="Mode: Auto")
-        ttk.Label(main, textvariable=self.status_var, style='Status.TLabel').pack(pady=5)
-
-        # Mode frame
-        mode_frame = ttk.LabelFrame(main, text="Mode", padding=10)
-        mode_frame.pack(fill='x', pady=5)
-
-        self.mode_var = tk.StringVar(value="auto")
-        mode_btns = ttk.Frame(mode_frame)
-        mode_btns.pack(fill='x')
-
-        ttk.Radiobutton(mode_btns, text="Automatique", variable=self.mode_var,
-                       value="auto", command=self.set_auto_mode).pack(side='left', expand=True)
-        ttk.Radiobutton(mode_btns, text="Manuel", variable=self.mode_var,
-                       value="manual", command=self.set_manual_mode).pack(side='left', expand=True)
-
-        # Presets frame
-        presets_frame = ttk.LabelFrame(main, text="Presets", padding=10)
-        presets_frame.pack(fill='x', pady=5)
-
-        presets_row = ttk.Frame(presets_frame)
-        presets_row.pack(fill='x')
-
-        presets = [("TURBO", 100), ("Perf", 80), ("Balance", 50), ("Quiet", 30), ("Silent", 12)]
-        for text, percent in presets:
-            ttk.Button(presets_row, text=f"{text}\n{percent}%",
-                      command=lambda p=percent: self.set_fans_percent(p)).pack(side='left', expand=True, padx=2)
-
-        # Individual fan control
-        individual_frame = ttk.LabelFrame(main, text="Controle individuel", padding=10)
-        individual_frame.pack(fill='x', pady=5)
-
-        # Link checkbox
-        self.link_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(individual_frame, text="Lier les ventilateurs",
-                       variable=self.link_var, command=self.toggle_link).pack(anchor='w')
-
-        # CPU Fan slider
-        cpu_row = ttk.Frame(individual_frame)
-        cpu_row.pack(fill='x', pady=5)
-        ttk.Label(cpu_row, text="CPU:", width=5).pack(side='left')
-        self.cpu_slider_value = tk.IntVar(value=50)
-        self.cpu_slider_label = ttk.Label(cpu_row, text="50%", width=5)
-        self.cpu_slider_label.pack(side='left')
-        self.cpu_slider = ttk.Scale(cpu_row, from_=10, to=100, variable=self.cpu_slider_value,
-                                   command=self.update_cpu_slider, orient='horizontal')
-        self.cpu_slider.pack(side='left', fill='x', expand=True, padx=5)
-
-        # GPU Fan slider
-        gpu_row = ttk.Frame(individual_frame)
-        gpu_row.pack(fill='x', pady=5)
-        ttk.Label(gpu_row, text="GPU:", width=5).pack(side='left')
-        self.gpu_slider_value = tk.IntVar(value=50)
-        self.gpu_slider_label = ttk.Label(gpu_row, text="50%", width=5)
-        self.gpu_slider_label.pack(side='left')
-        self.gpu_slider = ttk.Scale(gpu_row, from_=10, to=100, variable=self.gpu_slider_value,
-                                   command=self.update_gpu_slider, orient='horizontal')
-        self.gpu_slider.pack(side='left', fill='x', expand=True, padx=5)
-
-        ttk.Button(individual_frame, text="Appliquer", command=self.apply_individual).pack(pady=5)
-
-        # CPU Boost
-        boost_frame = ttk.LabelFrame(main, text="CPU Boost", padding=10)
-        boost_frame.pack(fill='x', pady=5)
-
-        boost_row = ttk.Frame(boost_frame)
-        boost_row.pack(fill='x')
-
-        self.boost_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(boost_row, text="Turbo Boost", variable=self.boost_var,
-                       command=self.toggle_cpu_boost).pack(side='left')
-        self.boost_status = ttk.Label(boost_row, text="ON", foreground=self.colors['success'], font=('Segoe UI', 10, 'bold'))
-        self.boost_status.pack(side='right')
-
-        self.check_boost_status()
-
-        # Warning
-        ttk.Label(main, text="Mode SILENT = surveillez les temperatures!",
-                 foreground=self.colors['warning'], font=('Segoe UI', 9)).pack(pady=5)
-
-        # Start threads
+    def __init__(self):
+        super().__init__()
         self.running = True
-        self.temp_thread = threading.Thread(target=self.update_temps, daemon=True)
-        self.temp_thread.start()
-
-        # Setup system tray
-        if TRAY_AVAILABLE:
-            self.setup_tray()
-
-        # Handle window close - minimize to tray instead of closing
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close_button)
-
-    def create_tray_image(self):
-        """Create a simple fan icon for the tray"""
-        size = 64
-        image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        # Draw a simple circular fan icon
-        draw.ellipse([4, 4, size-4, size-4], fill='#0066cc', outline='#003366', width=2)
-        draw.ellipse([size//2-8, size//2-8, size//2+8, size//2+8], fill='white')
-        return image
-
-    def setup_tray(self):
-        """Setup system tray icon"""
-        image = self.create_tray_image()
-
-        menu = pystray.Menu(
-            pystray.MenuItem("Afficher", self.show_window, default=True),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("TURBO 100%", lambda: self.tray_set_fans(100)),
-            pystray.MenuItem("Performance 80%", lambda: self.tray_set_fans(80)),
-            pystray.MenuItem("Balanced 50%", lambda: self.tray_set_fans(50)),
-            pystray.MenuItem("Quiet 30%", lambda: self.tray_set_fans(30)),
-            pystray.MenuItem("Silent 12%", lambda: self.tray_set_fans(12)),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Auto", self.tray_set_auto),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quitter", self.quit_app)
-        )
-
-        self.tray_icon = pystray.Icon("fanctl", image, "ASUS Fan Control", menu)
-
-        # Run tray in separate thread
-        tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
-        tray_thread.start()
-
-    def tray_set_fans(self, percent):
-        """Set fans from tray menu"""
-        self.cpu_fan_percent = percent
-        self.gpu_fan_percent = percent
-        self.root.after(0, lambda: self.cpu_slider_value.set(percent))
-        self.root.after(0, lambda: self.gpu_slider_value.set(percent))
-        self.root.after(0, lambda: self.cpu_slider_label.config(text=f"{percent}%"))
-        self.root.after(0, lambda: self.gpu_slider_label.config(text=f"{percent}%"))
-        self.root.after(0, lambda: self.start_manual_mode())
-        self.root.after(0, lambda: self.status_var.set(f"Mode: Manuel - {percent}%"))
-
-    def tray_set_auto(self):
-        """Set auto mode from tray"""
-        self.root.after(0, self.set_auto_mode)
-
-    def minimize_to_tray(self):
-        """Minimize window to system tray"""
-        if TRAY_AVAILABLE and self.tray_icon:
-            self.root.withdraw()
-            self.window_visible = False
-
-    def show_window(self):
-        """Show window from tray"""
-        self.root.after(0, self.root.deiconify)
-        self.root.after(0, self.root.lift)
-        self.window_visible = True
-
-    def on_close_button(self):
-        """Handle window close button - minimize to tray if available"""
-        if TRAY_AVAILABLE:
-            self.minimize_to_tray()
-        else:
-            self.quit_app()
-
-    def quit_app(self):
-        """Completely quit the application"""
-        self.running = False
-        self.manual_mode_active = False
-        if self.tray_icon:
-            self.tray_icon.stop()
-        self.root.quit()
-        self.root.destroy()
-
-    def maintain_fan_speed(self):
-        """Background thread that continuously sends fan speed commands"""
-        while self.running and self.manual_mode_active:
-            cpu_hex = hex(int(self.cpu_fan_percent * 255 / 100))
-            gpu_hex = hex(int(self.gpu_fan_percent * 255 / 100))
-            self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 1' | sudo tee /proc/acpi/call > /dev/null")
-            self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 1' | sudo tee /proc/acpi/call > /dev/null")
-            self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 0 {cpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
-            self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 1 {gpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
-            time.sleep(0.1)
-
-    def update_temps(self):
-        while self.running:
-            try:
-                with open('/sys/class/hwmon/hwmon6/temp1_input', 'r') as f:
-                    cpu_temp = int(f.read().strip()) // 1000
-                    color = self.colors['success'] if cpu_temp < 60 else self.colors['warning'] if cpu_temp < 80 else self.colors['danger']
-                    self.cpu_temp_var.set(f"{cpu_temp}C")
-                    self.cpu_temp_label.configure(foreground=color)
-            except:
-                self.cpu_temp_var.set("--C")
-
-            try:
-                with open('/sys/class/hwmon/hwmon5/temp1_input', 'r') as f:
-                    gpu_temp = int(f.read().strip()) // 1000
-                    color = self.colors['success'] if gpu_temp < 60 else self.colors['warning'] if gpu_temp < 80 else self.colors['danger']
-                    self.gpu_temp_var.set(f"{gpu_temp}C")
-                    self.gpu_temp_label.configure(foreground=color)
-            except:
-                self.gpu_temp_var.set("--C")
-
-            time.sleep(2)
-
-    def update_cpu_slider(self, value):
-        self.cpu_slider_label.config(text=f"{int(float(value))}%")
-        if self.link_var.get():
-            self.gpu_slider_value.set(int(float(value)))
-            self.gpu_slider_label.config(text=f"{int(float(value))}%")
-
-    def update_gpu_slider(self, value):
-        self.gpu_slider_label.config(text=f"{int(float(value))}%")
-        if self.link_var.get():
-            self.cpu_slider_value.set(int(float(value)))
-            self.cpu_slider_label.config(text=f"{int(float(value))}%")
-
-    def toggle_link(self):
-        if self.link_var.get():
-            cpu_val = self.cpu_slider_value.get()
-            self.gpu_slider_value.set(cpu_val)
-            self.gpu_slider_label.config(text=f"{cpu_val}%")
-
-    def apply_individual(self):
-        self.cpu_fan_percent = self.cpu_slider_value.get()
-        self.gpu_fan_percent = self.gpu_slider_value.get()
-        self.start_manual_mode()
-        if self.cpu_fan_percent == self.gpu_fan_percent:
-            self.status_var.set(f"Mode: Manuel - {self.cpu_fan_percent}%")
-        else:
-            self.status_var.set(f"Manuel - CPU:{self.cpu_fan_percent}% GPU:{self.gpu_fan_percent}%")
+        self.manual_mode = False
+        self.cpu_percent = 50
+        self.gpu_percent = 50
+        self.maintain_thread = None
 
     def run_cmd(self, cmd):
         try:
@@ -350,77 +32,359 @@ class FanControlGUI:
         except:
             return False
 
-    def enable_manual_mode(self):
+    def enable_manual(self):
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 1' | sudo tee /proc/acpi/call > /dev/null")
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 1' | sudo tee /proc/acpi/call > /dev/null")
 
-    def disable_manual_mode(self):
+    def disable_manual(self):
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 0' | sudo tee /proc/acpi/call > /dev/null")
 
-    def set_fans(self, cpu_hex, gpu_hex):
+    def set_fans(self):
+        cpu_hex = hex(int(self.cpu_percent * 255 / 100))
+        gpu_hex = hex(int(self.gpu_percent * 255 / 100))
         self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 0 {cpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
         self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 1 {gpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
 
-    def start_manual_mode(self):
-        self.mode_var.set("manual")
+    def maintain_loop(self):
+        while self.running and self.manual_mode:
+            self.enable_manual()
+            self.set_fans()
+            time.sleep(0.1)
+
+    def start_manual(self, cpu, gpu):
+        self.cpu_percent = cpu
+        self.gpu_percent = gpu
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 0' | sudo tee /proc/acpi/call > /dev/null")
-        time.sleep(0.5)
+        time.sleep(0.3)
+        self.enable_manual()
+        self.set_fans()
 
-        cpu_hex = hex(int(self.cpu_fan_percent * 255 / 100))
-        gpu_hex = hex(int(self.gpu_fan_percent * 255 / 100))
-        self.enable_manual_mode()
-        self.set_fans(cpu_hex, gpu_hex)
+        if not self.manual_mode:
+            self.manual_mode = True
+            self.maintain_thread = threading.Thread(target=self.maintain_loop, daemon=True)
+            self.maintain_thread.start()
 
-        if not self.manual_mode_active:
-            self.manual_mode_active = True
-            self.fan_maintain_thread = threading.Thread(target=self.maintain_fan_speed, daemon=True)
-            self.fan_maintain_thread.start()
+        if cpu == gpu:
+            self.status_changed.emit(f"Manuel - {cpu}%")
+        else:
+            self.status_changed.emit(f"CPU:{cpu}% GPU:{gpu}%")
 
-    def set_fans_percent(self, percent):
-        self.cpu_fan_percent = percent
-        self.gpu_fan_percent = percent
-        self.cpu_slider_value.set(percent)
-        self.gpu_slider_value.set(percent)
-        self.cpu_slider_label.config(text=f"{percent}%")
-        self.gpu_slider_label.config(text=f"{percent}%")
-        self.start_manual_mode()
-        self.status_var.set(f"Mode: Manuel - {percent}%")
-
-    def set_auto_mode(self):
-        self.manual_mode_active = False
-        self.mode_var.set("auto")
-        self.disable_manual_mode()
+    def set_auto(self):
+        self.manual_mode = False
+        self.disable_manual()
         self.run_cmd("echo 1 | sudo tee /sys/devices/platform/h5600_fan/thermal_policy > /dev/null 2>&1")
-        self.status_var.set("Mode: Automatique")
+        self.status_changed.emit("Automatique")
 
-    def set_manual_mode(self):
+    def stop(self):
+        self.running = False
+        self.manual_mode = False
+
+
+class FanControlGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.controller = FanController()
+        self.controller.status_changed.connect(self.update_status)
+        self.linked = True
+
+        self.init_ui()
+        self.init_tray()
+        self.start_temp_monitor()
+
+    def init_ui(self):
+        self.setWindowTitle("ASUS Fan Control")
+        self.setMinimumSize(400, 600)
+        self.resize(450, 700)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setSpacing(10)
+
+        # Header
+        header = QLabel("ASUS Fan Control")
+        header.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        layout.addWidget(header)
+
+        subtitle = QLabel("ProArt StudioBook H5600QM")
+        subtitle.setStyleSheet("color: gray;")
+        layout.addWidget(subtitle)
+
+        # Temperatures
+        temp_group = QGroupBox("Temperatures")
+        temp_layout = QHBoxLayout(temp_group)
+
+        cpu_temp_layout = QVBoxLayout()
+        cpu_temp_layout.addWidget(QLabel("CPU"))
+        self.cpu_temp_label = QLabel("--°C")
+        self.cpu_temp_label.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        cpu_temp_layout.addWidget(self.cpu_temp_label)
+        temp_layout.addLayout(cpu_temp_layout)
+
+        gpu_temp_layout = QVBoxLayout()
+        gpu_temp_layout.addWidget(QLabel("GPU"))
+        self.gpu_temp_label = QLabel("--°C")
+        self.gpu_temp_label.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        gpu_temp_layout.addWidget(self.gpu_temp_label)
+        temp_layout.addLayout(gpu_temp_layout)
+
+        layout.addWidget(temp_group)
+
+        # Status
+        self.status_label = QLabel("Mode: Automatique")
+        self.status_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.status_label.setStyleSheet("color: #0066cc;")
+        layout.addWidget(self.status_label)
+
+        # Mode
+        mode_group = QGroupBox("Mode")
+        mode_layout = QHBoxLayout(mode_group)
+        self.auto_radio = QRadioButton("Automatique")
+        self.auto_radio.setChecked(True)
+        self.auto_radio.clicked.connect(self.on_auto_mode)
+        self.manual_radio = QRadioButton("Manuel")
+        self.manual_radio.clicked.connect(self.on_manual_mode)
+        mode_layout.addWidget(self.auto_radio)
+        mode_layout.addWidget(self.manual_radio)
+        layout.addWidget(mode_group)
+
+        # Presets
+        presets_group = QGroupBox("Presets")
+        presets_layout = QHBoxLayout(presets_group)
+        for name, percent in [("TURBO", 100), ("Perf", 80), ("Balance", 50), ("Quiet", 30), ("Silent", 12)]:
+            btn = QPushButton(f"{name}\n{percent}%")
+            btn.clicked.connect(lambda checked, p=percent: self.set_preset(p))
+            presets_layout.addWidget(btn)
+        layout.addWidget(presets_group)
+
+        # Individual control
+        individual_group = QGroupBox("Controle individuel")
+        individual_layout = QVBoxLayout(individual_group)
+
+        self.link_check = QCheckBox("Lier les ventilateurs")
+        self.link_check.setChecked(True)
+        self.link_check.stateChanged.connect(self.on_link_changed)
+        individual_layout.addWidget(self.link_check)
+
+        # CPU slider
+        cpu_layout = QHBoxLayout()
+        cpu_layout.addWidget(QLabel("CPU:"))
+        self.cpu_value_label = QLabel("50%")
+        self.cpu_value_label.setMinimumWidth(40)
+        cpu_layout.addWidget(self.cpu_value_label)
+        self.cpu_slider = QSlider(Qt.Horizontal)
+        self.cpu_slider.setRange(10, 100)
+        self.cpu_slider.setValue(50)
+        self.cpu_slider.valueChanged.connect(self.on_cpu_slider)
+        cpu_layout.addWidget(self.cpu_slider)
+        individual_layout.addLayout(cpu_layout)
+
+        # GPU slider
+        gpu_layout = QHBoxLayout()
+        gpu_layout.addWidget(QLabel("GPU:"))
+        self.gpu_value_label = QLabel("50%")
+        self.gpu_value_label.setMinimumWidth(40)
+        gpu_layout.addWidget(self.gpu_value_label)
+        self.gpu_slider = QSlider(Qt.Horizontal)
+        self.gpu_slider.setRange(10, 100)
+        self.gpu_slider.setValue(50)
+        self.gpu_slider.valueChanged.connect(self.on_gpu_slider)
+        gpu_layout.addWidget(self.gpu_slider)
+        individual_layout.addLayout(gpu_layout)
+
+        apply_btn = QPushButton("Appliquer")
+        apply_btn.clicked.connect(self.apply_individual)
+        individual_layout.addWidget(apply_btn)
+
+        layout.addWidget(individual_group)
+
+        # CPU Boost
+        boost_group = QGroupBox("CPU Boost")
+        boost_layout = QHBoxLayout(boost_group)
+        self.boost_check = QCheckBox("Turbo Boost")
+        self.boost_check.stateChanged.connect(self.toggle_boost)
+        boost_layout.addWidget(self.boost_check)
+        self.boost_status = QLabel("ON")
+        self.boost_status.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.boost_status.setStyleSheet("color: green;")
+        boost_layout.addWidget(self.boost_status)
+        layout.addWidget(boost_group)
+
+        self.check_boost()
+
+        # Warning
+        warning = QLabel("Mode SILENT = surveillez les temperatures!")
+        warning.setStyleSheet("color: orange;")
+        layout.addWidget(warning)
+
+        layout.addStretch()
+
+    def create_tray_icon(self):
+        """Create a simple colored icon for tray"""
+        pixmap = QPixmap(32, 32)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setBrush(QColor("#0066cc"))
+        painter.setPen(QColor("#003366"))
+        painter.drawEllipse(2, 2, 28, 28)
+        painter.setBrush(QColor("white"))
+        painter.drawEllipse(12, 12, 8, 8)
+        painter.end()
+        return QIcon(pixmap)
+
+    def init_tray(self):
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(self.create_tray_icon())
+        self.tray_icon.setToolTip("ASUS Fan Control")
+
+        # Tray menu
+        tray_menu = QMenu()
+
+        show_action = QAction("Afficher", self)
+        show_action.triggered.connect(self.show_window)
+        tray_menu.addAction(show_action)
+
+        tray_menu.addSeparator()
+
+        for name, percent in [("TURBO 100%", 100), ("Performance 80%", 80),
+                               ("Balanced 50%", 50), ("Quiet 30%", 30), ("Silent 12%", 12)]:
+            action = QAction(name, self)
+            action.triggered.connect(lambda checked, p=percent: self.set_preset(p))
+            tray_menu.addAction(action)
+
+        tray_menu.addSeparator()
+
+        auto_action = QAction("Auto", self)
+        auto_action.triggered.connect(self.on_auto_mode)
+        tray_menu.addAction(auto_action)
+
+        tray_menu.addSeparator()
+
+        quit_action = QAction("Quitter", self)
+        quit_action.triggered.connect(self.quit_app)
+        tray_menu.addAction(quit_action)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        self.tray_icon.show()
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_window()
+
+    def show_window(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        """Minimize to tray instead of closing"""
+        event.ignore()
+        self.hide()
+
+    def quit_app(self):
+        self.controller.stop()
+        self.tray_icon.hide()
+        QApplication.quit()
+
+    def start_temp_monitor(self):
+        self.temp_timer = QTimer()
+        self.temp_timer.timeout.connect(self.update_temps)
+        self.temp_timer.start(2000)
+        self.update_temps()
+
+    def update_temps(self):
+        try:
+            with open('/sys/class/hwmon/hwmon6/temp1_input', 'r') as f:
+                temp = int(f.read().strip()) // 1000
+                color = "green" if temp < 60 else "orange" if temp < 80 else "red"
+                self.cpu_temp_label.setText(f"{temp}°C")
+                self.cpu_temp_label.setStyleSheet(f"color: {color};")
+        except:
+            self.cpu_temp_label.setText("--°C")
+
+        try:
+            with open('/sys/class/hwmon/hwmon5/temp1_input', 'r') as f:
+                temp = int(f.read().strip()) // 1000
+                color = "green" if temp < 60 else "orange" if temp < 80 else "red"
+                self.gpu_temp_label.setText(f"{temp}°C")
+                self.gpu_temp_label.setStyleSheet(f"color: {color};")
+        except:
+            self.gpu_temp_label.setText("--°C")
+
+    def update_status(self, status):
+        self.status_label.setText(f"Mode: {status}")
+
+    def on_cpu_slider(self, value):
+        self.cpu_value_label.setText(f"{value}%")
+        if self.linked:
+            self.gpu_slider.blockSignals(True)
+            self.gpu_slider.setValue(value)
+            self.gpu_value_label.setText(f"{value}%")
+            self.gpu_slider.blockSignals(False)
+
+    def on_gpu_slider(self, value):
+        self.gpu_value_label.setText(f"{value}%")
+        if self.linked:
+            self.cpu_slider.blockSignals(True)
+            self.cpu_slider.setValue(value)
+            self.cpu_value_label.setText(f"{value}%")
+            self.cpu_slider.blockSignals(False)
+
+    def on_link_changed(self, state):
+        self.linked = state == Qt.Checked
+        if self.linked:
+            self.gpu_slider.setValue(self.cpu_slider.value())
+
+    def set_preset(self, percent):
+        self.cpu_slider.setValue(percent)
+        self.gpu_slider.setValue(percent)
+        self.manual_radio.setChecked(True)
+        threading.Thread(target=self.controller.start_manual, args=(percent, percent), daemon=True).start()
+
+    def apply_individual(self):
+        cpu = self.cpu_slider.value()
+        gpu = self.gpu_slider.value()
+        self.manual_radio.setChecked(True)
+        threading.Thread(target=self.controller.start_manual, args=(cpu, gpu), daemon=True).start()
+
+    def on_auto_mode(self):
+        self.auto_radio.setChecked(True)
+        threading.Thread(target=self.controller.set_auto, daemon=True).start()
+
+    def on_manual_mode(self):
         self.apply_individual()
 
-    def check_boost_status(self):
+    def check_boost(self):
         try:
             with open('/sys/devices/system/cpu/cpufreq/boost', 'r') as f:
                 enabled = f.read().strip() == '1'
-                self.boost_var.set(enabled)
-                self.boost_status.config(text="ON" if enabled else "OFF",
-                                        foreground=self.colors['success'] if enabled else self.colors['danger'])
+                self.boost_check.setChecked(enabled)
+                self.boost_status.setText("ON" if enabled else "OFF")
+                self.boost_status.setStyleSheet(f"color: {'green' if enabled else 'red'};")
         except:
-            self.boost_status.config(text="N/A", foreground=self.colors['text_dim'])
+            self.boost_status.setText("N/A")
 
-    def toggle_cpu_boost(self):
-        new_state = self.boost_var.get()
-        value = "1" if new_state else "0"
-        if self.run_cmd(f"echo {value} | sudo tee /sys/devices/system/cpu/cpufreq/boost > /dev/null"):
-            self.boost_status.config(text="ON" if new_state else "OFF",
-                                    foreground=self.colors['success'] if new_state else self.colors['danger'])
-        else:
-            self.boost_var.set(not new_state)
+    def toggle_boost(self, state):
+        value = "1" if state == Qt.Checked else "0"
+        result = subprocess.run(f"echo {value} | sudo tee /sys/devices/system/cpu/cpufreq/boost > /dev/null",
+                               shell=True, capture_output=True)
+        if result.returncode == 0:
+            self.boost_status.setText("ON" if state else "OFF")
+            self.boost_status.setStyleSheet(f"color: {'green' if state else 'red'};")
+
 
 def main():
-    root = tk.Tk()
-    app = FanControlGUI(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
+    window = FanControlGUI()
+    window.show()
+
+    sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()
