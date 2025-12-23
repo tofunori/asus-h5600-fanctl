@@ -16,6 +16,13 @@ class FanControlGUI:
         self.root.resizable(True, True)
         self.root.minsize(450, 800)
 
+        # Manual mode state
+        self.manual_mode_active = False
+        self.cpu_fan_percent = 50
+        self.gpu_fan_percent = 50
+        self.fans_linked = True  # When True, both fans use same speed
+        self.fan_maintain_thread = None
+
         # Light mode colors for better visibility
         self.colors = {
             'bg': '#f5f5f5',
@@ -130,19 +137,46 @@ class FanControlGUI:
                            command=lambda p=percent: self.set_fans_percent(p))
             btn.pack(fill='x')
 
-        # Slider frame
-        slider_frame = ttk.LabelFrame(main, text="📊 Vitesse personnalisée", padding=15)
-        slider_frame.pack(fill='x', pady=8)
+        # Individual fan control frame
+        individual_frame = ttk.LabelFrame(main, text="🎛️ Contrôle individuel", padding=15)
+        individual_frame.pack(fill='x', pady=8)
 
-        self.slider_value = tk.IntVar(value=50)
-        self.slider_label = ttk.Label(slider_frame, text="50%", font=('Segoe UI', 20, 'bold'))
-        self.slider_label.pack(pady=5)
+        # Link checkbox
+        link_row = ttk.Frame(individual_frame)
+        link_row.pack(fill='x', pady=(0, 10))
+        self.link_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(link_row, text="🔗 Lier les deux ventilateurs",
+                       variable=self.link_var, command=self.toggle_link).pack(side='left')
 
-        self.slider = ttk.Scale(slider_frame, from_=10, to=100, variable=self.slider_value,
-                               command=self.update_slider_label, orient='horizontal', length=350)
-        self.slider.pack(pady=10)
+        # CPU Fan slider
+        cpu_fan_frame = ttk.Frame(individual_frame)
+        cpu_fan_frame.pack(fill='x', pady=5)
+        ttk.Label(cpu_fan_frame, text="CPU Fan (gauche):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
 
-        ttk.Button(slider_frame, text="✓ Appliquer", command=self.apply_custom).pack(pady=5)
+        cpu_slider_row = ttk.Frame(cpu_fan_frame)
+        cpu_slider_row.pack(fill='x')
+        self.cpu_slider_value = tk.IntVar(value=50)
+        self.cpu_slider_label = ttk.Label(cpu_slider_row, text="50%", font=('Segoe UI', 14, 'bold'), width=5)
+        self.cpu_slider_label.pack(side='left')
+        self.cpu_slider = ttk.Scale(cpu_slider_row, from_=10, to=100, variable=self.cpu_slider_value,
+                                   command=self.update_cpu_slider, orient='horizontal', length=280)
+        self.cpu_slider.pack(side='left', padx=10)
+
+        # GPU Fan slider
+        gpu_fan_frame = ttk.Frame(individual_frame)
+        gpu_fan_frame.pack(fill='x', pady=5)
+        ttk.Label(gpu_fan_frame, text="GPU Fan (droite):", font=('Segoe UI', 10, 'bold')).pack(anchor='w')
+
+        gpu_slider_row = ttk.Frame(gpu_fan_frame)
+        gpu_slider_row.pack(fill='x')
+        self.gpu_slider_value = tk.IntVar(value=50)
+        self.gpu_slider_label = ttk.Label(gpu_slider_row, text="50%", font=('Segoe UI', 14, 'bold'), width=5)
+        self.gpu_slider_label.pack(side='left')
+        self.gpu_slider = ttk.Scale(gpu_slider_row, from_=10, to=100, variable=self.gpu_slider_value,
+                                   command=self.update_gpu_slider, orient='horizontal', length=280)
+        self.gpu_slider.pack(side='left', padx=10)
+
+        ttk.Button(individual_frame, text="✓ Appliquer", command=self.apply_individual).pack(pady=10)
 
         # CPU Options frame
         cpu_frame = ttk.LabelFrame(main, text="🖥️ Options CPU", padding=15)
@@ -179,7 +213,20 @@ class FanControlGUI:
 
     def on_close(self):
         self.running = False
+        self.manual_mode_active = False
         self.root.destroy()
+
+    def maintain_fan_speed(self):
+        """Background thread that continuously sends fan speed commands to prevent EC takeover"""
+        while self.running and self.manual_mode_active:
+            cpu_hex = hex(int(self.cpu_fan_percent * 255 / 100))
+            gpu_hex = hex(int(self.gpu_fan_percent * 255 / 100))
+            # Re-enable manual mode and set speeds
+            self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 1' | sudo tee /proc/acpi/call > /dev/null")
+            self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 1' | sudo tee /proc/acpi/call > /dev/null")
+            self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 0 {cpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
+            self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 1 {gpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
+            time.sleep(0.1)  # Repeat every 0.1 seconds for stable GPU fan control
 
     def update_temps(self):
         while self.running:
@@ -205,8 +252,33 @@ class FanControlGUI:
 
             time.sleep(2)
 
-    def update_slider_label(self, value):
-        self.slider_label.config(text=f"{int(float(value))}%")
+    def update_cpu_slider(self, value):
+        self.cpu_slider_label.config(text=f"{int(float(value))}%")
+        if self.link_var.get():
+            self.gpu_slider_value.set(int(float(value)))
+            self.gpu_slider_label.config(text=f"{int(float(value))}%")
+
+    def update_gpu_slider(self, value):
+        self.gpu_slider_label.config(text=f"{int(float(value))}%")
+        if self.link_var.get():
+            self.cpu_slider_value.set(int(float(value)))
+            self.cpu_slider_label.config(text=f"{int(float(value))}%")
+
+    def toggle_link(self):
+        if self.link_var.get():
+            # Sync GPU to CPU value
+            cpu_val = self.cpu_slider_value.get()
+            self.gpu_slider_value.set(cpu_val)
+            self.gpu_slider_label.config(text=f"{cpu_val}%")
+
+    def apply_individual(self):
+        self.cpu_fan_percent = self.cpu_slider_value.get()
+        self.gpu_fan_percent = self.gpu_slider_value.get()
+        self.start_manual_mode()
+        if self.cpu_fan_percent == self.gpu_fan_percent:
+            self.status_var.set(f"● Mode: Manuel - {self.cpu_fan_percent}% (maintenu)")
+        else:
+            self.status_var.set(f"● Manuel - CPU:{self.cpu_fan_percent}% GPU:{self.gpu_fan_percent}% (maintenu)")
 
     def run_cmd(self, cmd):
         try:
@@ -223,28 +295,53 @@ class FanControlGUI:
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 0' | sudo tee /proc/acpi/call > /dev/null")
 
-    def set_fans(self, hex_value):
-        self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 0 {hex_value}' | sudo tee /proc/acpi/call > /dev/null")
-        self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 1 {hex_value}' | sudo tee /proc/acpi/call > /dev/null")
+    def set_fans(self, cpu_hex, gpu_hex):
+        self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 0 {cpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
+        self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 1 {gpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
+
+    def start_manual_mode(self):
+        """Initialize manual mode and start maintain thread"""
+        self.mode_var.set("manual")
+
+        # Initialize manual mode with full sequence
+        self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
+        self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 0' | sudo tee /proc/acpi/call > /dev/null")
+        time.sleep(0.5)
+
+        # Enable manual mode
+        cpu_hex = hex(int(self.cpu_fan_percent * 255 / 100))
+        gpu_hex = hex(int(self.gpu_fan_percent * 255 / 100))
+        self.enable_manual_mode()
+        self.set_fans(cpu_hex, gpu_hex)
+
+        # Start maintain thread if not already running
+        if not self.manual_mode_active:
+            self.manual_mode_active = True
+            self.fan_maintain_thread = threading.Thread(target=self.maintain_fan_speed, daemon=True)
+            self.fan_maintain_thread.start()
 
     def set_fans_percent(self, percent):
-        self.mode_var.set("manual")
-        hex_value = hex(int(percent * 255 / 100))
-        self.enable_manual_mode()
-        self.set_fans(hex_value)
-        self.status_var.set(f"● Mode: Manuel - {percent}%")
+        """Set both fans to the same percentage (used by presets)"""
+        self.cpu_fan_percent = percent
+        self.gpu_fan_percent = percent
+        self.cpu_slider_value.set(percent)
+        self.gpu_slider_value.set(percent)
+        self.cpu_slider_label.config(text=f"{percent}%")
+        self.gpu_slider_label.config(text=f"{percent}%")
+        self.start_manual_mode()
+        self.status_var.set(f"● Mode: Manuel - {percent}% (maintenu)")
 
     def set_auto_mode(self):
+        # Stop the maintain thread
+        self.manual_mode_active = False
+
         self.disable_manual_mode()
         self.run_cmd("echo 1 | sudo tee /sys/devices/platform/h5600_fan/thermal_policy > /dev/null 2>&1")
         self.status_var.set("● Mode: Automatique")
 
     def set_manual_mode(self):
-        self.enable_manual_mode()
-        self.status_var.set("● Mode: Manuel")
-
-    def apply_custom(self):
-        self.set_fans_percent(self.slider_value.get())
+        # Use current slider values when switching to manual
+        self.apply_individual()
 
     def check_boost_status(self):
         try:
