@@ -3,6 +3,20 @@
 # Controls BOTH fans (CPU + GPU)
 # NOTE: EC regains control after ~1-2s, use 'maintain' to keep control
 
+# Find hwmon path by sensor name (e.g., 'k10temp', 'amdgpu')
+find_hwmon() {
+    local sensor_name=$1
+    for hwmon in /sys/class/hwmon/hwmon*; do
+        if [ -f "$hwmon/name" ]; then
+            if [ "$(cat "$hwmon/name" 2>/dev/null)" = "$sensor_name" ]; then
+                echo "$hwmon/temp1_input"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
 enable_manual_mode() {
     # Enable manual mode for CPU and GPU fans
     echo "\\_SB.ATKD.CWAP 0x00110013 1" | sudo tee /proc/acpi/call > /dev/null
@@ -94,10 +108,23 @@ case "$1" in
         ;;
     status)
         echo "=== Temperatures ==="
-        cpu_temp=$(cat /sys/class/hwmon/hwmon6/temp1_input 2>/dev/null)
-        gpu_temp=$(cat /sys/class/hwmon/hwmon5/temp1_input 2>/dev/null)
-        [ -n "$cpu_temp" ] && echo "CPU: $((cpu_temp/1000))°C"
-        [ -n "$gpu_temp" ] && echo "GPU: $((gpu_temp/1000))°C"
+        # Auto-detect sensors by name
+        cpu_hwmon=$(find_hwmon "k10temp")
+        gpu_hwmon=$(find_hwmon "amdgpu")
+
+        if [ -n "$cpu_hwmon" ]; then
+            cpu_temp=$(cat "$cpu_hwmon" 2>/dev/null)
+            [ -n "$cpu_temp" ] && echo "CPU: $((cpu_temp/1000))°C"
+        else
+            echo "CPU: sensor not found (k10temp)"
+        fi
+
+        if [ -n "$gpu_hwmon" ]; then
+            gpu_temp=$(cat "$gpu_hwmon" 2>/dev/null)
+            [ -n "$gpu_temp" ] && echo "GPU: $((gpu_temp/1000))°C"
+        else
+            echo "GPU: sensor not found (amdgpu)"
+        fi
         ;;
     *)
         echo "ASUS H5600QM Fan Control"

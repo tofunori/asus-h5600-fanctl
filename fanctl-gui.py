@@ -6,6 +6,7 @@ import sys
 import subprocess
 import threading
 import time
+import glob
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox,
@@ -37,6 +38,21 @@ PROFILES = {
 }
 
 
+def find_hwmon_by_name(sensor_name):
+    """Find hwmon path by sensor name (e.g., 'k10temp', 'amdgpu')
+
+    Returns the path to temp1_input file, or None if not found.
+    """
+    for hwmon_path in glob.glob('/sys/class/hwmon/hwmon*'):
+        try:
+            with open(f'{hwmon_path}/name', 'r') as f:
+                if f.read().strip() == sensor_name:
+                    return f'{hwmon_path}/temp1_input'
+        except (IOError, OSError):
+            continue
+    return None
+
+
 class FanController(QObject):
     """Handles fan control in background thread"""
     status_changed = pyqtSignal(str)
@@ -52,6 +68,21 @@ class FanController(QObject):
         self.cpu_temp = 0
         self.gpu_temp = 0
         self.control_thread = None
+
+        # Auto-detect temperature sensors
+        self.cpu_temp_path = find_hwmon_by_name('k10temp')  # AMD Ryzen CPU
+        self.gpu_temp_path = find_hwmon_by_name('amdgpu')   # AMD GPU
+
+        # Log detection results
+        if self.cpu_temp_path:
+            print(f"CPU sensor found: {self.cpu_temp_path}")
+        else:
+            print("WARNING: CPU sensor (k10temp) not found!")
+
+        if self.gpu_temp_path:
+            print(f"GPU sensor found: {self.gpu_temp_path}")
+        else:
+            print("WARNING: GPU sensor (amdgpu) not found!")
 
     def run_cmd(self, cmd):
         try:
@@ -75,16 +106,24 @@ class FanController(QObject):
         self.run_cmd(f"echo '\\_SB.PCI0.SBRG.EC0.ST84 1 {gpu_hex}' | sudo tee /proc/acpi/call > /dev/null")
 
     def read_temps(self):
-        try:
-            with open('/sys/class/hwmon/hwmon6/temp1_input', 'r') as f:
-                self.cpu_temp = int(f.read().strip()) // 1000
-        except:
+        # Read CPU temperature
+        if self.cpu_temp_path:
+            try:
+                with open(self.cpu_temp_path, 'r') as f:
+                    self.cpu_temp = int(f.read().strip()) // 1000
+            except (IOError, OSError, ValueError):
+                self.cpu_temp = 0
+        else:
             self.cpu_temp = 0
 
-        try:
-            with open('/sys/class/hwmon/hwmon5/temp1_input', 'r') as f:
-                self.gpu_temp = int(f.read().strip()) // 1000
-        except:
+        # Read GPU temperature
+        if self.gpu_temp_path:
+            try:
+                with open(self.gpu_temp_path, 'r') as f:
+                    self.gpu_temp = int(f.read().strip()) // 1000
+            except (IOError, OSError, ValueError):
+                self.gpu_temp = 0
+        else:
             self.gpu_temp = 0
 
         self.temps_changed.emit(self.cpu_temp, self.gpu_temp)
@@ -371,7 +410,7 @@ class FanControlGUI(QMainWindow):
         tray_menu.addSeparator()
 
         # Manual presets
-        for name, percent in [("Manuel 100%", 100), ("Manuel 50%", 50), ("Manuel 30%", 30)]:
+        for name, percent in [("Manual 100%", 100), ("Manual 50%", 50), ("Manual 30%", 30)]:
             action = QAction(name, self)
             action.triggered.connect(lambda checked, p=percent: self.set_preset(p))
             tray_menu.addAction(action)
