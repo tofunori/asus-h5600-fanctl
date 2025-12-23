@@ -60,6 +60,9 @@ sudo chmod +x /usr/local/bin/fanctl
 # GUI tool
 sudo cp fanctl-gui.py /usr/local/bin/fanctl-gui
 sudo chmod +x /usr/local/bin/fanctl-gui
+
+# Polkit policy (allows running GUI without password prompt)
+sudo cp org.fanctl.policy /usr/share/polkit-1/actions/
 ```
 
 ### 4. (Optional) Add desktop entry and autostart
