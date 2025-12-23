@@ -361,7 +361,7 @@ class FanControlGUI(QMainWindow):
         tray_menu.addSeparator()
 
         # Profiles submenu
-        profiles_menu = QMenu("Profils Auto", self)
+        profiles_menu = QMenu("Auto Profiles", self)
         for name in PROFILES.keys():
             action = QAction(name, self)
             action.triggered.connect(lambda checked, n=name: self.set_profile(n))
