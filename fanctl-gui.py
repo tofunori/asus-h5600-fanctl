@@ -651,7 +651,7 @@ class FanControlGUI(QMainWindow):
         self.tray_icon.show()
 
     def on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.DoubleClick:
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.show_window()
 
     def show_window(self):
