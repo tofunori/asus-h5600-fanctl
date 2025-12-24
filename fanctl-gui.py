@@ -93,24 +93,30 @@ QComboBox QAbstractItemView {
 LIGHT_STYLE = ""  # Use system default
 
 # Fan curve profiles: (temp_threshold, fan_percent)
-# Optimized with 85°C threshold for smoother transitions
+# Separate curves for CPU and GPU - GPU needs slightly more cooling at high temps
+# Based on ASUS recommendations: GPU min 34% at 70C vs CPU 31%
 # Hysteresis of 5°C applied in control loop to prevent oscillations
 PROFILES = {
-    "Silent": [
-        (0, 0), (45, 0), (50, 8), (55, 12), (60, 18), (65, 28), (70, 40), (80, 60), (85, 80), (90, 100)
-    ],
-    "Quiet": [
-        (0, 0), (45, 0), (50, 10), (55, 15), (60, 22), (65, 32), (70, 45), (80, 65), (85, 85), (90, 100)
-    ],
-    "Balanced": [
-        (0, 0), (40, 0), (50, 12), (55, 18), (60, 26), (65, 38), (70, 50), (80, 70), (85, 88), (90, 100)
-    ],
-    "Performance": [
-        (0, 15), (45, 15), (50, 20), (55, 28), (60, 38), (65, 50), (70, 62), (80, 80), (85, 95), (90, 100)
-    ],
-    "Turbo": [
-        (0, 20), (45, 20), (50, 28), (55, 38), (60, 50), (65, 62), (70, 75), (80, 90), (85, 100), (90, 100)
-    ],
+    "Silent": {
+        "cpu": [(0, 0), (50, 0), (55, 5), (58, 8), (60, 10), (62, 12), (65, 18), (70, 30), (75, 45), (80, 60), (85, 80), (90, 100)],
+        "gpu": [(0, 0), (50, 0), (55, 7), (58, 10), (60, 12), (62, 15), (65, 22), (70, 34), (75, 50), (80, 65), (85, 85), (90, 100)],
+    },
+    "Quiet": {
+        "cpu": [(0, 0), (50, 0), (55, 8), (58, 10), (60, 14), (62, 18), (65, 25), (70, 38), (75, 50), (80, 65), (85, 85), (90, 100)],
+        "gpu": [(0, 0), (50, 0), (55, 10), (58, 12), (60, 16), (62, 22), (65, 30), (70, 42), (75, 55), (80, 70), (85, 90), (90, 100)],
+    },
+    "Balanced": {
+        "cpu": [(0, 0), (48, 0), (52, 5), (55, 10), (58, 14), (60, 18), (62, 22), (65, 30), (70, 42), (75, 55), (80, 70), (85, 88), (90, 100)],
+        "gpu": [(0, 0), (48, 0), (52, 7), (55, 12), (58, 16), (60, 22), (62, 26), (65, 35), (70, 48), (75, 60), (80, 75), (85, 92), (90, 100)],
+    },
+    "Performance": {
+        "cpu": [(0, 10), (50, 10), (55, 15), (58, 20), (60, 26), (62, 32), (65, 40), (70, 52), (75, 65), (80, 78), (85, 92), (90, 100)],
+        "gpu": [(0, 12), (50, 12), (55, 18), (58, 24), (60, 30), (62, 36), (65, 45), (70, 58), (75, 70), (80, 82), (85, 95), (90, 100)],
+    },
+    "Turbo": {
+        "cpu": [(0, 15), (50, 15), (55, 22), (58, 30), (60, 38), (62, 45), (65, 55), (70, 68), (75, 80), (80, 90), (85, 100), (90, 100)],
+        "gpu": [(0, 18), (50, 18), (55, 26), (58, 34), (60, 42), (62, 50), (65, 60), (70, 72), (75, 85), (80, 95), (85, 100), (90, 100)],
+    },
 }
 
 # Hysteresis in degrees - fan won't slow down until temp drops by this amount
@@ -240,8 +246,9 @@ class CurveDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        # Get curve data
-        curve_data = PROFILES.get(profile_name, [])
+        # Get curve data - show CPU curve (GPU is similar but slightly higher)
+        profile = PROFILES.get(profile_name, {"cpu": [], "gpu": []})
+        curve_data = profile["cpu"]
 
         # Add curve widget
         curve_widget = CurveWidget(profile_name, curve_data)
@@ -253,10 +260,85 @@ class CurveDialog(QDialog):
         layout.addWidget(close_btn)
 
 
+class GaugeWidget(QWidget):
+    """Gauge widget with needle for fan speed display"""
+    def __init__(self, title="Fan", parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.value = 0
+        self.setFixedSize(90, 90)
+
+    def setValue(self, value):
+        self.value = max(0, min(100, value))
+        self.update()
+
+    def paintEvent(self, event):
+        import math
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Colors based on theme
+        is_dark = self.palette().window().color().lightness() < 128
+        bg_color = QColor("#2a2a2a") if is_dark else QColor("#f5f5f5")
+        arc_bg = QColor("#3a3a3a") if is_dark else QColor("#ddd")
+        text_color = QColor("#e0e0e0") if is_dark else QColor("#333")
+
+        # Dimensions
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, h // 2 + 5
+        radius = 35
+
+        # Draw background arc (220 degrees, from 160° to -60°)
+        pen = QPen(arc_bg, 8, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(pen)
+        rect = self.rect().adjusted(15, 15, -15, -15)
+        painter.drawArc(rect, 220 * 16, -220 * 16)
+
+        # Draw colored arc based on value (green->yellow->red)
+        if self.value <= 50:
+            color = QColor("#4CAF50")  # Green
+        elif self.value <= 75:
+            color = QColor("#FFC107")  # Yellow
+        else:
+            color = QColor("#F44336")  # Red
+
+        pen = QPen(color, 8, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(pen)
+        arc_span = int(-220 * self.value / 100)
+        painter.drawArc(rect, 220 * 16, arc_span * 16)
+
+        # Draw needle
+        angle = math.radians(220 - (220 * self.value / 100))
+        needle_len = radius - 8
+        nx = cx + needle_len * math.cos(angle)
+        ny = cy - needle_len * math.sin(angle)
+
+        pen = QPen(QColor("#0078d4"), 2)
+        painter.setPen(pen)
+        painter.drawLine(cx, cy, int(nx), int(ny))
+
+        # Draw center dot
+        painter.setBrush(QBrush(QColor("#0078d4")))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(cx - 4, cy - 4, 8, 8)
+
+        # Draw title
+        painter.setPen(QPen(text_color))
+        font = QFont("Segoe UI", 8)
+        painter.setFont(font)
+        painter.drawText(self.rect().adjusted(0, 5, 0, 0), Qt.AlignHCenter | Qt.AlignTop, self.title)
+
+        # Draw value
+        font = QFont("Segoe UI", 11, QFont.Bold)
+        painter.setFont(font)
+        painter.drawText(self.rect().adjusted(0, 0, 0, -5), Qt.AlignHCenter | Qt.AlignBottom, f"{self.value}%")
+
+
 class FanController(QObject):
     """Handles fan control in background thread"""
     status_changed = pyqtSignal(str)
     temps_changed = pyqtSignal(int, int)  # cpu_temp, gpu_temp
+    fan_duty_changed = pyqtSignal(int, int)  # cpu_duty, gpu_duty
 
     def __init__(self):
         super().__init__()
@@ -268,9 +350,11 @@ class FanController(QObject):
         self.cpu_temp = 0
         self.gpu_temp = 0
         self.control_thread = None
-        # Hysteresis tracking
-        self.last_fan_speed = 0
-        self.last_max_temp = 0
+        # Hysteresis tracking - separate for CPU and GPU
+        self.last_cpu_speed = 0
+        self.last_gpu_speed = 0
+        self.last_cpu_temp = 0
+        self.last_gpu_temp = 0
 
     def run_cmd(self, cmd):
         try:
@@ -312,6 +396,29 @@ class FanController(QObject):
 
         self.temps_changed.emit(self.cpu_temp, self.gpu_temp)
 
+    def read_fan_duty(self):
+        """Read actual fan duty cycle via ST83"""
+        try:
+            # CPU fan duty
+            subprocess.run("echo '\\_SB.PCI0.SBRG.EC0.ST83 0' | sudo tee /proc/acpi/call > /dev/null",
+                          shell=True, capture_output=True)
+            result = subprocess.run("sudo cat /proc/acpi/call", shell=True, capture_output=True)
+            cpu_hex = result.stdout.replace(b'\x00', b'').decode().strip()
+            cpu_raw = int(cpu_hex, 16) if cpu_hex.startswith('0x') else 0
+            cpu_duty = cpu_raw * 100 // 255
+
+            # GPU fan duty
+            subprocess.run("echo '\\_SB.PCI0.SBRG.EC0.ST83 1' | sudo tee /proc/acpi/call > /dev/null",
+                          shell=True, capture_output=True)
+            result = subprocess.run("sudo cat /proc/acpi/call", shell=True, capture_output=True)
+            gpu_hex = result.stdout.replace(b'\x00', b'').decode().strip()
+            gpu_raw = int(gpu_hex, 16) if gpu_hex.startswith('0x') else 0
+            gpu_duty = gpu_raw * 100 // 255
+
+            self.fan_duty_changed.emit(cpu_duty, gpu_duty)
+        except Exception as e:
+            pass
+
     def get_fan_speed_for_temp(self, temp, curve):
         """Calculate fan speed based on temperature and curve"""
         for i in range(len(curve) - 1):
@@ -323,10 +430,25 @@ class FanController(QObject):
                 return int(f1 + ratio * (f2 - f1))
         return curve[-1][1]  # Return max if above all thresholds
 
+    def get_fan_speed_with_hysteresis(self, temp, last_temp, last_speed, curve):
+        """Calculate fan speed with hysteresis for one fan"""
+        target = self.get_fan_speed_for_temp(temp, curve)
+
+        if target > last_speed:
+            # Temperature rising - apply immediately
+            return target, temp
+        elif temp <= last_temp - HYSTERESIS:
+            # Temperature dropped enough - allow slowdown
+            return target, temp
+        else:
+            # Hysteresis zone - keep current speed
+            return last_speed, last_temp
+
     def control_loop(self):
         """Main control loop - handles both manual and profile modes"""
         while self.running:
             self.read_temps()
+            self.read_fan_duty()
 
             if self.mode == "manual":
                 self.enable_manual()
@@ -334,29 +456,24 @@ class FanController(QObject):
                 time.sleep(0.1)
 
             elif self.mode == "profile":
-                curve = PROFILES.get(self.profile_name, PROFILES["Balanced"])
-                # Use max temp for both fans (conservative approach)
-                max_temp = max(self.cpu_temp, self.gpu_temp)
-                target_speed = self.get_fan_speed_for_temp(max_temp, curve)
+                profile = PROFILES.get(self.profile_name, PROFILES["Balanced"])
+                cpu_curve = profile["cpu"]
+                gpu_curve = profile["gpu"]
 
-                # Apply hysteresis to prevent oscillations
-                if target_speed > self.last_fan_speed:
-                    # Temperature rising - apply immediately
-                    fan_speed = target_speed
-                    self.last_max_temp = max_temp
-                elif max_temp <= self.last_max_temp - HYSTERESIS:
-                    # Temperature dropped enough - allow fan to slow down
-                    fan_speed = target_speed
-                    self.last_max_temp = max_temp
-                else:
-                    # Keep current speed (hysteresis zone)
-                    fan_speed = self.last_fan_speed
+                # CPU fan - based on CPU temperature
+                cpu_speed, self.last_cpu_temp = self.get_fan_speed_with_hysteresis(
+                    self.cpu_temp, self.last_cpu_temp, self.last_cpu_speed, cpu_curve)
+                self.last_cpu_speed = cpu_speed
 
-                self.last_fan_speed = fan_speed
+                # GPU fan - based on GPU temperature
+                gpu_speed, self.last_gpu_temp = self.get_fan_speed_with_hysteresis(
+                    self.gpu_temp, self.last_gpu_temp, self.last_gpu_speed, gpu_curve)
+                self.last_gpu_speed = gpu_speed
+
                 self.enable_manual()
-                self.set_fans(fan_speed, fan_speed)
+                self.set_fans(cpu_speed, gpu_speed)
 
-                self.status_changed.emit(f"{self.profile_name} - {fan_speed}% ({max_temp}°C)")
+                self.status_changed.emit(f"{self.profile_name} - CPU:{cpu_speed}% GPU:{gpu_speed}%")
                 time.sleep(0.5)  # Profile mode can be slower
 
             else:  # auto mode
@@ -407,6 +524,7 @@ class FanControlGUI(QMainWindow):
 
         self.init_ui()
         self.init_tray()
+        self.controller.fan_duty_changed.connect(self.update_fan_gauges)
         self.controller.start_control()
 
         # Default settings: Balanced profile + CPU boost disabled
@@ -479,16 +597,10 @@ class FanControlGUI(QMainWindow):
 
         # Profile buttons
         profile_grid = QGridLayout()
-        profiles = [
-            ("Silent", "Minimal"),
-            ("Quiet", "Low"),
-            ("Balanced", "Default"),
-            ("Performance", "High"),
-            ("Turbo", "Max"),
-        ]
-        for i, (name, desc) in enumerate(profiles):
-            btn = QPushButton(f"{name}\n{desc}")
-            btn.setMinimumHeight(60)
+        profiles = ["Silent", "Quiet", "Balanced", "Performance", "Turbo"]
+        for i, name in enumerate(profiles):
+            btn = QPushButton(name)
+            btn.setMinimumHeight(45)
             btn.clicked.connect(lambda checked, n=name: self.set_profile(n))
             # Add right-click context menu to show curve
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -499,10 +611,16 @@ class FanControlGUI(QMainWindow):
 
         profile_layout.addLayout(profile_grid)
 
-        # Show current curve
-        self.curve_label = QLabel("")
-        self.curve_label.setStyleSheet("color: gray; font-size: 10px;")
-        profile_layout.addWidget(self.curve_label)
+        # Fan speed gauges
+        gauge_layout = QHBoxLayout()
+        gauge_layout.addStretch()
+        self.cpu_gauge = GaugeWidget("CPU Fan")
+        self.gpu_gauge = GaugeWidget("GPU Fan")
+        gauge_layout.addWidget(self.cpu_gauge)
+        gauge_layout.addSpacing(20)
+        gauge_layout.addWidget(self.gpu_gauge)
+        gauge_layout.addStretch()
+        profile_layout.addLayout(gauge_layout)
 
         profile_layout.addStretch()
         tabs.addTab(profile_tab, "Profils Auto")
@@ -718,6 +836,10 @@ class FanControlGUI(QMainWindow):
     def update_status(self, status):
         self.status_label.setText(f"Mode: {status}")
 
+    def update_fan_gauges(self, cpu_duty, gpu_duty):
+        self.cpu_gauge.setValue(cpu_duty)
+        self.gpu_gauge.setValue(gpu_duty)
+
     def on_cpu_slider(self, value):
         self.cpu_value_label.setText(f"{value}%")
         if self.linked:
@@ -740,9 +862,6 @@ class FanControlGUI(QMainWindow):
             self.gpu_slider.setValue(self.cpu_slider.value())
 
     def set_profile(self, name):
-        curve = PROFILES.get(name, [])
-        curve_str = " | ".join([f"{t}°C:{f}%" for t, f in curve])
-        self.curve_label.setText(f"Courbe: {curve_str}")
         threading.Thread(target=self.controller.set_profile, args=(name,), daemon=True).start()
 
     def show_curve_menu(self, pos, profile_name, button):
@@ -765,7 +884,6 @@ class FanControlGUI(QMainWindow):
         threading.Thread(target=self.controller.set_manual, args=(cpu, gpu), daemon=True).start()
 
     def on_auto_mode(self):
-        self.curve_label.setText("")
         threading.Thread(target=self.controller.set_auto, daemon=True).start()
 
     def check_boost(self):
