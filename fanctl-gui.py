@@ -409,6 +409,18 @@ class FanControlGUI(QMainWindow):
         self.init_tray()
         self.controller.start_control()
 
+        # Default settings: Balanced profile + CPU boost disabled
+        self.set_profile("Balanced")
+        self.disable_boost_on_start()
+
+    def disable_boost_on_start(self):
+        """Disable CPU boost on startup"""
+        subprocess.run("echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost > /dev/null",
+                      shell=True, capture_output=True)
+        self.boost_check.setChecked(False)
+        self.boost_status.setText("OFF")
+        self.boost_status.setStyleSheet("color: red;")
+
     def init_ui(self):
         self.setWindowTitle("ASUS Fan Control")
         self.setMinimumSize(420, 650)
