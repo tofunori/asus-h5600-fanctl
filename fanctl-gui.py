@@ -658,19 +658,23 @@ class FanControlGUI(QMainWindow):
         # Position window near tray icon (like g-helper)
         tray_geo = self.tray_icon.geometry()
         if tray_geo.isValid():
-            # Get screen geometry
-            screen = QApplication.primaryScreen().geometry()
+            # Get the screen where tray icon is located (multi-monitor support)
+            tray_screen = QApplication.screenAt(tray_geo.center())
+            if tray_screen:
+                screen = tray_screen.geometry()
+            else:
+                screen = QApplication.primaryScreen().geometry()
 
             # Calculate position: above tray icon, aligned to right
             x = tray_geo.x() - self.width() + tray_geo.width()
             y = tray_geo.y() - self.height() - 10  # 10px margin above tray
 
             # Keep window on screen
-            if x < 0:
-                x = 10
-            if x + self.width() > screen.width():
-                x = screen.width() - self.width() - 10
-            if y < 0:
+            if x < screen.x():
+                x = screen.x() + 10
+            if x + self.width() > screen.x() + screen.width():
+                x = screen.x() + screen.width() - self.width() - 10
+            if y < screen.y():
                 y = tray_geo.y() + tray_geo.height() + 10  # Below tray if no space above
 
             self.move(x, y)
