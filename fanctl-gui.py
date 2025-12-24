@@ -97,19 +97,19 @@ LIGHT_STYLE = ""  # Use system default
 # Hysteresis of 5°C applied in control loop to prevent oscillations
 PROFILES = {
     "Silent": [
-        (0, 0), (55, 0), (60, 15), (70, 30), (80, 50), (85, 75), (90, 100)
+        (0, 0), (45, 0), (50, 8), (55, 12), (60, 18), (65, 28), (70, 40), (80, 60), (85, 80), (90, 100)
     ],
     "Quiet": [
-        (0, 0), (55, 0), (60, 20), (70, 40), (80, 60), (85, 80), (90, 100)
+        (0, 0), (45, 0), (50, 10), (55, 15), (60, 22), (65, 32), (70, 45), (80, 65), (85, 85), (90, 100)
     ],
     "Balanced": [
-        (0, 0), (50, 0), (60, 25), (70, 50), (80, 70), (85, 85), (90, 100)
+        (0, 0), (40, 0), (50, 12), (55, 18), (60, 26), (65, 38), (70, 50), (80, 70), (85, 88), (90, 100)
     ],
     "Performance": [
-        (0, 20), (50, 20), (60, 35), (70, 55), (80, 75), (85, 90), (90, 100)
+        (0, 15), (45, 15), (50, 20), (55, 28), (60, 38), (65, 50), (70, 62), (80, 80), (85, 95), (90, 100)
     ],
     "Turbo": [
-        (0, 25), (50, 25), (60, 45), (70, 70), (80, 90), (85, 100), (90, 100)
+        (0, 20), (45, 20), (50, 28), (55, 38), (60, 50), (65, 62), (70, 75), (80, 90), (85, 100), (90, 100)
     ],
 }
 
@@ -480,11 +480,11 @@ class FanControlGUI(QMainWindow):
         # Profile buttons
         profile_grid = QGridLayout()
         profiles = [
-            ("Silent", "0% <60°C\nTres silencieux"),
-            ("Quiet", "0% <60°C\nSilencieux"),
-            ("Balanced", "0% <60°C\nEquilibre"),
-            ("Performance", "15% min\nPerformant"),
-            ("Turbo", "15% min\nMaximum"),
+            ("Silent", "Minimal"),
+            ("Quiet", "Low"),
+            ("Balanced", "Default"),
+            ("Performance", "High"),
+            ("Turbo", "Max"),
         ]
         for i, (name, desc) in enumerate(profiles):
             btn = QPushButton(f"{name}\n{desc}")

@@ -123,18 +123,19 @@ fanctl-gui
 
 ## Automatic Fan Profiles
 
-Temperature-based profiles with **5°C hysteresis** to prevent fan oscillations:
+Temperature-based profiles with **5°C hysteresis** and **very progressive curves** to prevent fan oscillations:
 
-| Profile | 0-50°C | 60°C | 70°C | 80°C | 85°C | 90°C |
-|---------|--------|------|------|------|------|------|
-| **Silent** | 0% | 15% | 30% | 50% | 75% | 100% |
-| **Quiet** | 0% | 20% | 40% | 60% | 80% | 100% |
-| **Balanced** | 0% | 25% | 50% | 70% | 85% | 100% |
-| **Performance** | 20% | 35% | 55% | 75% | 90% | 100% |
-| **Turbo** | 25% | 45% | 70% | 90% | 100% | 100% |
+| Profile | 0-45°C | 50°C | 55°C | 60°C | 65°C | 70°C | 80°C | 85°C | 90°C |
+|---------|--------|------|------|------|------|------|------|------|------|
+| **Silent** | 0% | 8% | 12% | 18% | 28% | 40% | 60% | 80% | 100% |
+| **Quiet** | 0% | 10% | 15% | 22% | 32% | 45% | 65% | 85% | 100% |
+| **Balanced** | 0% | 12% | 18% | 26% | 38% | 50% | 70% | 88% | 100% |
+| **Performance** | 15% | 20% | 28% | 38% | 50% | 62% | 80% | 95% | 100% |
+| **Turbo** | 20% | 28% | 38% | 50% | 62% | 75% | 90% | 100% | 100% |
 
+- **Progressive curves**: Fans start at low speed (8-12%) from 50°C for smooth transitions
 - **Hysteresis**: Fan won't slow down until temperature drops by 5°C
-- **85°C threshold**: Smoother transition before reaching 100%
+- **No abrupt jumps**: More temperature points eliminate oscillation around 60°C
 - Uses the higher temperature between CPU and GPU
 
 ## How It Works
