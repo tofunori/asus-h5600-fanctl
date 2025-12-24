@@ -6,7 +6,10 @@
 enable_manual_mode() {
     # Activer mode manuel pour CPU et GPU fans
     echo "\\_SB.ATKD.CWAP 0x00110013 1" | sudo tee /proc/acpi/call > /dev/null
-    echo "\\_SB.ATKD.CWAP 0x00110014 1" | sudo tee /proc/acpi/call > /dev/null
+    # Force GPU active bit et manual mode via écriture directe EC
+    # (CWAP 0x00110014 échoue car bit 0x02 non actif dans registre 0xCC10)
+    echo "\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x10 0x03" | sudo tee /proc/acpi/call > /dev/null
+    echo "\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x30 0x41" | sudo tee /proc/acpi/call > /dev/null
 }
 
 disable_manual_mode() {

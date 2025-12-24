@@ -6,35 +6,251 @@ import sys
 import subprocess
 import threading
 import time
+import os
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox,
                              QGroupBox, QRadioButton, QSystemTrayIcon, QMenu, QAction,
-                             QComboBox, QTabWidget, QSpinBox, QGridLayout)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
+                             QComboBox, QTabWidget, QSpinBox, QGridLayout, QDialog)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QSettings, QPointF
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QPainterPath, QBrush
+
+# Dark mode stylesheet
+DARK_STYLE = """
+QMainWindow, QWidget {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+}
+QGroupBox {
+    border: 1px solid #3a3a3a;
+    border-radius: 5px;
+    margin-top: 10px;
+    padding-top: 10px;
+    background-color: #252525;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    color: #e0e0e0;
+}
+QPushButton {
+    background-color: #3a3a3a;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 8px;
+    color: #e0e0e0;
+}
+QPushButton:hover {
+    background-color: #4a4a4a;
+}
+QPushButton:pressed {
+    background-color: #2a2a2a;
+}
+QSlider::groove:horizontal {
+    background: #3a3a3a;
+    height: 8px;
+    border-radius: 4px;
+}
+QSlider::handle:horizontal {
+    background: #0078d4;
+    width: 18px;
+    margin: -5px 0;
+    border-radius: 9px;
+}
+QTabWidget::pane {
+    border: 1px solid #3a3a3a;
+    background-color: #252525;
+}
+QTabBar::tab {
+    background-color: #2a2a2a;
+    color: #e0e0e0;
+    padding: 8px 16px;
+    border: 1px solid #3a3a3a;
+}
+QTabBar::tab:selected {
+    background-color: #3a3a3a;
+}
+QCheckBox {
+    color: #e0e0e0;
+}
+QComboBox {
+    background-color: #3a3a3a;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 4px;
+    color: #e0e0e0;
+}
+QComboBox::drop-down {
+    border: none;
+}
+QComboBox QAbstractItemView {
+    background-color: #2a2a2a;
+    color: #e0e0e0;
+    selection-background-color: #0078d4;
+}
+"""
+
+LIGHT_STYLE = ""  # Use system default
 
 # Fan curve profiles: (temp_threshold, fan_percent)
-# Based on ASUS ProArt Creator Hub behavior:
-# - Silent/Quiet/Balanced: 0% until 60°C (official "Whisper mode" behavior)
-# - Performance/Turbo: 15% minimum for sustained workloads
+# Optimized with 85°C threshold for smoother transitions
+# Hysteresis of 5°C applied in control loop to prevent oscillations
 PROFILES = {
     "Silent": [
-        (0, 0), (60, 0), (65, 20), (70, 35), (80, 55), (90, 100)
+        (0, 0), (55, 0), (60, 15), (70, 30), (80, 50), (85, 75), (90, 100)
     ],
     "Quiet": [
-        (0, 0), (60, 0), (65, 25), (70, 40), (80, 65), (90, 100)
+        (0, 0), (55, 0), (60, 20), (70, 40), (80, 60), (85, 80), (90, 100)
     ],
     "Balanced": [
-        (0, 0), (60, 0), (65, 30), (70, 50), (80, 75), (90, 100)
+        (0, 0), (50, 0), (60, 25), (70, 50), (80, 70), (85, 85), (90, 100)
     ],
     "Performance": [
-        (0, 15), (60, 15), (65, 40), (70, 60), (80, 85), (90, 100)
+        (0, 20), (50, 20), (60, 35), (70, 55), (80, 75), (85, 90), (90, 100)
     ],
     "Turbo": [
-        (0, 15), (60, 15), (65, 50), (70, 75), (80, 100), (90, 100)
+        (0, 25), (50, 25), (60, 45), (70, 70), (80, 90), (85, 100), (90, 100)
     ],
 }
+
+# Hysteresis in degrees - fan won't slow down until temp drops by this amount
+HYSTERESIS = 5
+
+# Profile colors for curve visualization
+PROFILE_COLORS = {
+    "Silent": "#4CAF50",      # Green
+    "Quiet": "#03A9F4",       # Light blue
+    "Balanced": "#2196F3",    # Blue
+    "Performance": "#FF9800", # Orange
+    "Turbo": "#F44336",       # Red
+}
+
+
+class CurveWidget(QWidget):
+    """Widget to draw fan curve visualization"""
+    def __init__(self, profile_name, curve_data, parent=None):
+        super().__init__(parent)
+        self.profile_name = profile_name
+        self.curve_data = curve_data
+        self.setFixedSize(350, 250)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Margins
+        left_margin = 45
+        right_margin = 20
+        top_margin = 30
+        bottom_margin = 35
+
+        # Drawing area
+        width = self.width() - left_margin - right_margin
+        height = self.height() - top_margin - bottom_margin
+
+        # Background
+        is_dark = self.palette().window().color().lightness() < 128
+        bg_color = QColor("#2a2a2a") if is_dark else QColor("#ffffff")
+        grid_color = QColor("#404040") if is_dark else QColor("#e0e0e0")
+        text_color = QColor("#e0e0e0") if is_dark else QColor("#333333")
+
+        painter.fillRect(self.rect(), bg_color)
+
+        # Draw title
+        painter.setPen(QPen(text_color))
+        title_font = QFont("Segoe UI", 11, QFont.Bold)
+        painter.setFont(title_font)
+        painter.drawText(left_margin, 20, f"Profil: {self.profile_name}")
+
+        # Draw grid
+        painter.setPen(QPen(grid_color, 1, Qt.DotLine))
+
+        # Horizontal grid lines (every 25%)
+        for i in range(5):
+            y = top_margin + height - (i * height / 4)
+            painter.drawLine(left_margin, int(y), left_margin + width, int(y))
+
+        # Vertical grid lines (every 20°C)
+        for i in range(6):
+            x = left_margin + (i * width / 5)
+            painter.drawLine(int(x), top_margin, int(x), top_margin + height)
+
+        # Draw axes labels
+        painter.setPen(QPen(text_color))
+        label_font = QFont("Segoe UI", 8)
+        painter.setFont(label_font)
+
+        # Y-axis labels (fan %)
+        for i in range(5):
+            y = top_margin + height - (i * height / 4)
+            painter.drawText(5, int(y) + 4, f"{i * 25}%")
+
+        # X-axis labels (temperature)
+        temps = [0, 20, 40, 60, 80, 100]
+        for i, temp in enumerate(temps):
+            x = left_margin + (i * width / 5)
+            painter.drawText(int(x) - 10, top_margin + height + 15, f"{temp}°C")
+
+        # Draw curve
+        profile_color = QColor(PROFILE_COLORS.get(self.profile_name, "#0078d4"))
+
+        # Create path for the curve
+        path = QPainterPath()
+        points = []
+
+        for temp, fan_pct in self.curve_data:
+            x = left_margin + (temp / 100.0) * width
+            y = top_margin + height - (fan_pct / 100.0) * height
+            points.append(QPointF(x, y))
+
+        if points:
+            path.moveTo(points[0])
+            for point in points[1:]:
+                path.lineTo(point)
+
+        # Draw filled area under curve
+        fill_path = QPainterPath(path)
+        if points:
+            fill_path.lineTo(points[-1].x(), top_margin + height)
+            fill_path.lineTo(points[0].x(), top_margin + height)
+            fill_path.closeSubpath()
+
+        fill_color = QColor(profile_color)
+        fill_color.setAlpha(50)
+        painter.fillPath(fill_path, QBrush(fill_color))
+
+        # Draw curve line
+        painter.setPen(QPen(profile_color, 3))
+        painter.drawPath(path)
+
+        # Draw points
+        painter.setBrush(QBrush(profile_color))
+        painter.setPen(QPen(Qt.white, 2))
+        for point in points:
+            painter.drawEllipse(point, 5, 5)
+
+
+class CurveDialog(QDialog):
+    """Dialog to show fan curve visualization"""
+    def __init__(self, profile_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Courbe - {profile_name}")
+        self.setFixedSize(370, 300)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Get curve data
+        curve_data = PROFILES.get(profile_name, [])
+
+        # Add curve widget
+        curve_widget = CurveWidget(profile_name, curve_data)
+        layout.addWidget(curve_widget)
+
+        # Add close button
+        close_btn = QPushButton("Fermer")
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
 
 
 class FanController(QObject):
@@ -52,6 +268,9 @@ class FanController(QObject):
         self.cpu_temp = 0
         self.gpu_temp = 0
         self.control_thread = None
+        # Hysteresis tracking
+        self.last_fan_speed = 0
+        self.last_max_temp = 0
 
     def run_cmd(self, cmd):
         try:
@@ -61,8 +280,12 @@ class FanController(QObject):
             return False
 
     def enable_manual(self):
+        # Use direct EC register write - bypasses CWAP GPU check that fails
+        # Read current value, set bit 0x40 for manual mode
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 1' | sudo tee /proc/acpi/call > /dev/null")
-        self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 1' | sudo tee /proc/acpi/call > /dev/null")
+        # Force GPU active bit and manual mode via direct EC write
+        self.run_cmd("echo '\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x10 0x03' | sudo tee /proc/acpi/call > /dev/null")
+        self.run_cmd("echo '\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x30 0x41' | sudo tee /proc/acpi/call > /dev/null")
 
     def disable_manual(self):
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
@@ -114,8 +337,22 @@ class FanController(QObject):
                 curve = PROFILES.get(self.profile_name, PROFILES["Balanced"])
                 # Use max temp for both fans (conservative approach)
                 max_temp = max(self.cpu_temp, self.gpu_temp)
-                fan_speed = self.get_fan_speed_for_temp(max_temp, curve)
+                target_speed = self.get_fan_speed_for_temp(max_temp, curve)
 
+                # Apply hysteresis to prevent oscillations
+                if target_speed > self.last_fan_speed:
+                    # Temperature rising - apply immediately
+                    fan_speed = target_speed
+                    self.last_max_temp = max_temp
+                elif max_temp <= self.last_max_temp - HYSTERESIS:
+                    # Temperature dropped enough - allow fan to slow down
+                    fan_speed = target_speed
+                    self.last_max_temp = max_temp
+                else:
+                    # Keep current speed (hysteresis zone)
+                    fan_speed = self.last_fan_speed
+
+                self.last_fan_speed = fan_speed
                 self.enable_manual()
                 self.set_fans(fan_speed, fan_speed)
 
@@ -241,6 +478,11 @@ class FanControlGUI(QMainWindow):
             btn = QPushButton(f"{name}\n{desc}")
             btn.setMinimumHeight(60)
             btn.clicked.connect(lambda checked, n=name: self.set_profile(n))
+            # Add right-click context menu to show curve
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, n=name, b=btn: self.show_curve_menu(pos, n, b)
+            )
             profile_grid.addWidget(btn, i // 3, i % 3)
 
         profile_layout.addLayout(profile_grid)
@@ -329,6 +571,22 @@ class FanControlGUI(QMainWindow):
         layout.addWidget(boost_group)
 
         self.check_boost()
+
+        # Theme selector
+        theme_group = QGroupBox("Apparence")
+        theme_layout = QHBoxLayout(theme_group)
+        theme_layout.addWidget(QLabel("Theme:"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Systeme", "Sombre", "Clair"])
+        self.theme_combo.currentIndexChanged.connect(self.change_theme)
+        theme_layout.addWidget(self.theme_combo)
+        layout.addWidget(theme_group)
+
+        # Load saved theme
+        self.settings = QSettings("ASUS", "FanControl")
+        saved_theme = self.settings.value("theme", 0, type=int)
+        self.theme_combo.setCurrentIndex(saved_theme)
+        self.apply_theme(saved_theme)
 
         # Warning
         warning = QLabel("Mode SILENT = surveillez les temperatures!")
@@ -451,6 +709,15 @@ class FanControlGUI(QMainWindow):
         self.curve_label.setText(f"Courbe: {curve_str}")
         threading.Thread(target=self.controller.set_profile, args=(name,), daemon=True).start()
 
+    def show_curve_menu(self, pos, profile_name, button):
+        """Show context menu with option to view curve"""
+        menu = QMenu(self)
+        show_curve_action = menu.addAction("Voir la courbe")
+        action = menu.exec_(button.mapToGlobal(pos))
+        if action == show_curve_action:
+            dialog = CurveDialog(profile_name, self)
+            dialog.exec_()
+
     def set_preset(self, percent):
         self.cpu_slider.setValue(percent)
         self.gpu_slider.setValue(percent)
@@ -482,6 +749,19 @@ class FanControlGUI(QMainWindow):
         if result.returncode == 0:
             self.boost_status.setText("ON" if state else "OFF")
             self.boost_status.setStyleSheet(f"color: {'green' if state else 'red'};")
+
+    def change_theme(self, index):
+        self.apply_theme(index)
+        self.settings.setValue("theme", index)
+
+    def apply_theme(self, index):
+        app = QApplication.instance()
+        if index == 1:  # Sombre
+            app.setStyleSheet(DARK_STYLE)
+        elif index == 2:  # Clair
+            app.setStyleSheet(LIGHT_STYLE)
+        else:  # Systeme
+            app.setStyleSheet("")
 
 
 def main():
