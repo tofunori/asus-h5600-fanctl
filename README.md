@@ -4,15 +4,26 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 
 ## Features
 
+### Fan Control
 - **Automatic fan profiles** - Temperature-based fan curves with hysteresis (like ASUS ProArt Creator Hub)
 - **Manual fan control** - Set fan speed from 10% to 100%
 - **Separate CPU/GPU control** - Control each fan independently
 - **5 preset profiles** - Silent, Quiet, Balanced, Performance, Turbo
 - **Curve visualization** - Right-click on profiles to see the fan curve graph
-- **Dark/Light theme** - Choose your preferred appearance
+
+### Power Management
+- **Power Profiles** - Performance, Balanced, Power Saver (controls CPU energy, GPU power, CPU boost)
+- **Battery Charge Limit** - Limit charging to 60%, 80%, or 100% for battery longevity
 - **CPU Boost toggle** - Enable/disable AMD CPU boost
+- **Sleep/Wake handling** - Automatically stops fan control before suspend and restores after wake
+
+### Interface
+- **Dark/Light theme** - Choose your preferred appearance
 - **System tray support** - Minimize to tray, quick access menu
-- **Temperature display** - Real-time CPU and GPU temperatures
+- **Temperature display** - Real-time CPU and GPU temperatures with color coding
+- **Temperature alerts** - Notification when CPU/GPU exceeds 85°C
+- **Autostart option** - Start with system from settings
+- **HiDPI support** - Sharp rendering on high-resolution displays
 - **GUI and CLI** - Both graphical and command-line interfaces
 
 ## Supported Hardware
@@ -50,13 +61,13 @@ echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/$USER
 
 ```bash
 # Fedora
-sudo dnf install dkms kernel-devel python3-qt5 git
+sudo dnf install dkms kernel-devel python3-qt5 python3-dbus git
 
 # Ubuntu/Debian
-sudo apt install acpi-call-dkms python3-pyqt5 git
+sudo apt install acpi-call-dkms python3-pyqt5 python3-dbus git
 
 # Arch
-sudo pacman -S acpi_call python-pyqt5 git
+sudo pacman -S acpi_call python-pyqt5 python-dbus git
 ```
 
 ### 2. Install acpi_call (Fedora only - compile from source)
@@ -119,6 +130,12 @@ fanctl-gui
 - Separate sliders for CPU and GPU fans
 - Link/unlink fans for individual control
 - **Right-click on profile buttons** to see fan curve graph
+
+**Power Tab:**
+- Power Profiles: Performance / Balanced / Power Saver
+- Battery Charge Limit: 60% / 80% / 100%
+- Autostart toggle
+- Temperature alerts toggle
 - Theme selector (System/Dark/Light)
 
 ## Automatic Fan Profiles
@@ -137,6 +154,19 @@ Temperature-based profiles with **5°C hysteresis** and **very progressive curve
 - **Hysteresis**: Fan won't slow down until temperature drops by 5°C
 - **No abrupt jumps**: More temperature points eliminate oscillation around 60°C
 - Uses the higher temperature between CPU and GPU
+
+## Power Profiles
+
+| Profile | CPU Energy | GPU Power | CPU Boost |
+|---------|------------|-----------|-----------|
+| **Performance** | performance | high | ON |
+| **Balanced** | balance_power | auto | OFF |
+| **Power Saver** | power | low | OFF |
+
+These control:
+- `/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference`
+- `/sys/class/drm/card1/device/power_dpm_force_performance_level`
+- `/sys/devices/system/cpu/cpufreq/boost`
 
 ## How It Works
 

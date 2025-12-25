@@ -8,6 +8,15 @@ import threading
 import time
 import os
 
+# DBus for sleep/wake detection (must be before Qt imports)
+import dbus
+from dbus.mainloop.pyqt5 import DBusQtMainLoop
+
+# Enable HiDPI scaling for Qt5 (must be before QApplication)
+os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox,
                              QGroupBox, QRadioButton, QSystemTrayIcon, QMenu, QAction,
@@ -227,6 +236,32 @@ PROFILE_COLORS = {
     "Turbo": "#F44336",       # Red
 }
 
+# Power profiles: CPU energy preference + GPU power level + CPU boost
+POWER_PROFILES = {
+    "Performance": {
+        "cpu_energy": "performance",
+        "gpu_power": "high",
+        "cpu_boost": True,
+        "color": "#F44336",  # Red
+    },
+    "Balanced": {
+        "cpu_energy": "balance_power",
+        "gpu_power": "auto",
+        "cpu_boost": False,
+        "color": "#2196F3",  # Blue
+    },
+    "Power Saver": {
+        "cpu_energy": "power",
+        "gpu_power": "low",
+        "cpu_boost": False,
+        "color": "#4CAF50",  # Green
+    },
+}
+
+# Temperature notification settings
+TEMP_WARNING_THRESHOLD = 85  # Celsius
+NOTIFICATION_COOLDOWN = 60   # Seconds between notifications
+
 
 class CurveWidget(QWidget):
     """Widget to draw fan curve visualization with hover tooltips"""
@@ -262,9 +297,9 @@ class CurveWidget(QWidget):
 
         # Draw title
         painter.setPen(QPen(text_color))
-        title_font = QFont("Segoe UI", 11, QFont.Bold)
+        title_font = QFont("Cantarell", 11, QFont.Bold)
         painter.setFont(title_font)
-        painter.drawText(left_margin, 20, f"Profil: {self.profile_name}")
+        painter.drawText(left_margin, 20, f"Profile: {self.profile_name}")
 
         # Draw grid
         painter.setPen(QPen(grid_color, 1, Qt.DotLine))
@@ -281,7 +316,7 @@ class CurveWidget(QWidget):
 
         # Draw axes labels
         painter.setPen(QPen(text_color))
-        label_font = QFont("Segoe UI", 8)
+        label_font = QFont("Cantarell", 8)
         painter.setFont(label_font)
 
         # Y-axis labels (fan %)
@@ -366,18 +401,69 @@ class CurveDialog(QDialog):
         layout.addWidget(curve_widget)
 
         # Add close button
-        close_btn = QPushButton("Fermer")
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+
+
+class AboutDialog(QDialog):
+    """About dialog with project info and contact"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("About")
+        self.setFixedSize(380, 280)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        # Title
+        title = QLabel("ASUS Fan Control")
+        title.setFont(QFont("Cantarell", 18, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        # Version
+        version = QLabel("Version 1.2")
+        version.setAlignment(Qt.AlignCenter)
+        layout.addWidget(version)
+
+        layout.addSpacing(10)
+
+        # Description
+        desc = QLabel("Fan control utility for ASUS ProArt StudioBook H5600QM\nwith independent CPU/GPU temperature-based profiles.")
+        desc.setWordWrap(True)
+        desc.setAlignment(Qt.AlignCenter)
+        layout.addWidget(desc)
+
+        layout.addSpacing(15)
+
+        # Contact
+        contact = QLabel("Contact: tofunori@gmail.com")
+        contact.setAlignment(Qt.AlignCenter)
+        layout.addWidget(contact)
+
+        # GitHub
+        github = QLabel("GitHub: github.com/tofunori/asus-h5600-fanctl")
+        github.setAlignment(Qt.AlignCenter)
+        github.setStyleSheet("color: #0078d4;")
+        layout.addWidget(github)
+
+        layout.addStretch()
+
+        # Close button
+        close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
         layout.addWidget(close_btn)
 
 
 class GaugeWidget(QWidget):
     """Modern gauge widget with needle for fan speed display"""
-    def __init__(self, title="Fan", parent=None):
+    def __init__(self, title="Fan", accent_color=None, parent=None):
         super().__init__(parent)
         self.title = title
         self.value = 0
-        self.setFixedSize(140, 140)
+        self.accent_color = accent_color  # Custom color for needle/arc
+        self.setFixedSize(160, 160)
 
     def setValue(self, value):
         self.value = max(0, min(100, value))
@@ -398,8 +484,8 @@ class GaugeWidget(QWidget):
 
         # Dimensions
         w, h = self.width(), self.height()
-        cx, cy = w // 2, h // 2 + 8
-        radius = 50
+        cx, cy = w // 2, h // 2 + 5
+        radius = 60
 
         # Draw outer glow/shadow ring
         glow_rect = self.rect().adjusted(8, 8, -8, -8)
@@ -413,8 +499,10 @@ class GaugeWidget(QWidget):
         painter.setPen(pen)
         painter.drawArc(arc_rect, 225 * 16, -270 * 16)
 
-        # Draw colored arc based on value with gradient effect
-        if self.value <= 30:
+        # Draw colored arc - use accent color or value-based color
+        if self.accent_color:
+            color = QColor(self.accent_color)
+        elif self.value <= 30:
             color = QColor("#00E676")  # Bright green
         elif self.value <= 50:
             color = QColor("#4CAF50")  # Green
@@ -470,13 +558,13 @@ class GaugeWidget(QWidget):
 
         # Draw title at top
         painter.setPen(QPen(subtle_text))
-        font = QFont("Segoe UI", 9)
+        font = QFont("Cantarell", 9)
         painter.setFont(font)
         painter.drawText(self.rect().adjusted(0, 8, 0, 0), Qt.AlignHCenter | Qt.AlignTop, self.title)
 
         # Draw large value in center-bottom (with margin from edge)
         painter.setPen(QPen(text_color))
-        font = QFont("Segoe UI", 15, QFont.Bold)
+        font = QFont("Cantarell", 15, QFont.Bold)
         painter.setFont(font)
         painter.drawText(self.rect().adjusted(0, 10, 0, -5), Qt.AlignHCenter | Qt.AlignBottom, f"{self.value}%")
 
@@ -486,6 +574,7 @@ class FanController(QObject):
     status_changed = pyqtSignal(str)
     temps_changed = pyqtSignal(int, int)  # cpu_temp, gpu_temp
     fan_duty_changed = pyqtSignal(int, int)  # cpu_duty, gpu_duty
+    temp_warning = pyqtSignal(str, int)  # component, temp
 
     def __init__(self):
         super().__init__()
@@ -502,6 +591,14 @@ class FanController(QObject):
         self.last_gpu_speed = 0
         self.last_cpu_temp = 0
         self.last_gpu_temp = 0
+        # Temperature notification
+        self.notification_enabled = True
+        self.last_notification_time = 0
+        # Sleep/wake state tracking
+        self.last_mode = "auto"
+        self.last_profile = "Balanced"
+        self.last_manual_cpu = 50
+        self.last_manual_gpu = 50
 
     def run_cmd(self, cmd):
         try:
@@ -542,6 +639,23 @@ class FanController(QObject):
             self.gpu_temp = 0
 
         self.temps_changed.emit(self.cpu_temp, self.gpu_temp)
+        self.check_temp_warning()
+
+    def check_temp_warning(self):
+        """Check if temperature exceeds threshold and emit warning"""
+        if not self.notification_enabled:
+            return
+
+        current_time = time.time()
+        if current_time - self.last_notification_time < NOTIFICATION_COOLDOWN:
+            return
+
+        if self.cpu_temp > TEMP_WARNING_THRESHOLD:
+            self.last_notification_time = current_time
+            self.temp_warning.emit("CPU", self.cpu_temp)
+        elif self.gpu_temp > TEMP_WARNING_THRESHOLD:
+            self.last_notification_time = current_time
+            self.temp_warning.emit("GPU", self.gpu_temp)
 
     def read_fan_duty(self):
         """Read actual fan duty cycle via ST83"""
@@ -654,16 +768,41 @@ class FanController(QObject):
         self.last_cpu_temp = 0
         self.last_gpu_temp = 0
         self.start_control()
-        self.status_changed.emit(f"{profile_name} - En attente...")
+        self.status_changed.emit(f"{profile_name} - Loading...")
 
     def set_auto(self):
         self.mode = "auto"
         self.disable_manual()
         self.run_cmd("echo 1 | sudo tee /sys/devices/platform/h5600_fan/thermal_policy > /dev/null 2>&1")
-        self.status_changed.emit("Automatique (EC)")
+        self.status_changed.emit("Automatic (EC)")
 
     def stop(self):
         self.running = False
+
+    def prepare_for_sleep(self):
+        """Called before system suspend - save state and return to EC control"""
+        # Save current state
+        self.last_mode = self.mode
+        self.last_profile = self.profile_name
+        if self.mode == "manual":
+            self.last_manual_cpu = self.cpu_percent
+            self.last_manual_gpu = self.gpu_percent
+
+        # Stop control loop and return to EC (safe for suspend)
+        self.running = False
+        self.disable_manual()
+        self.status_changed.emit("Suspending...")
+
+    def resume_from_sleep(self):
+        """Called after system resumes - restore previous mode"""
+        self.running = True
+        # Restore previous mode
+        if self.last_mode == "profile":
+            self.set_profile(self.last_profile)
+        elif self.last_mode == "manual":
+            self.set_manual(self.last_manual_cpu, self.last_manual_gpu)
+        else:
+            self.set_auto()
 
 
 class FanControlGUI(QMainWindow):
@@ -676,7 +815,9 @@ class FanControlGUI(QMainWindow):
 
         self.init_ui()
         self.init_tray()
+        self.setup_sleep_detection()
         self.controller.fan_duty_changed.connect(self.update_fan_gauges)
+        self.controller.temp_warning.connect(self.show_temp_warning)
         self.controller.start_control()
 
         # Default settings: Balanced profile + CPU boost disabled
@@ -696,6 +837,9 @@ class FanControlGUI(QMainWindow):
         self.setMinimumSize(420, 650)
         self.resize(450, 700)
 
+        # Initialize settings early (before combo boxes trigger signals)
+        self.settings = QSettings("ASUS", "FanControl")
+
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -703,7 +847,7 @@ class FanControlGUI(QMainWindow):
 
         # Header
         header = QLabel("ASUS Fan Control")
-        header.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        header.setFont(QFont("Cantarell", 18, QFont.Bold))
         layout.addWidget(header)
 
         subtitle = QLabel("ProArt StudioBook H5600QM")
@@ -717,14 +861,14 @@ class FanControlGUI(QMainWindow):
         cpu_temp_layout = QVBoxLayout()
         cpu_temp_layout.addWidget(QLabel("CPU"))
         self.cpu_temp_label = QLabel("--°C")
-        self.cpu_temp_label.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        self.cpu_temp_label.setFont(QFont("Cantarell", 16, QFont.Bold))
         cpu_temp_layout.addWidget(self.cpu_temp_label)
         temp_layout.addLayout(cpu_temp_layout)
 
         gpu_temp_layout = QVBoxLayout()
         gpu_temp_layout.addWidget(QLabel("GPU"))
         self.gpu_temp_label = QLabel("--°C")
-        self.gpu_temp_label.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        self.gpu_temp_label.setFont(QFont("Cantarell", 16, QFont.Bold))
         gpu_temp_layout.addWidget(self.gpu_temp_label)
         temp_layout.addLayout(gpu_temp_layout)
 
@@ -732,7 +876,7 @@ class FanControlGUI(QMainWindow):
 
         # Status
         self.status_label = QLabel("Mode: Automatique")
-        self.status_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.status_label.setFont(QFont("Cantarell", 11, QFont.Bold))
         self.status_label.setStyleSheet("color: #0066cc;")
         layout.addWidget(self.status_label)
 
@@ -744,7 +888,7 @@ class FanControlGUI(QMainWindow):
         profile_tab = QWidget()
         profile_layout = QVBoxLayout(profile_tab)
 
-        profile_desc = QLabel("Ajustement automatique selon la temperature:")
+        profile_desc = QLabel("Auto adjustment based on temperature:")
         profile_layout.addWidget(profile_desc)
 
         # Profile buttons
@@ -764,20 +908,20 @@ class FanControlGUI(QMainWindow):
         profile_layout.addLayout(profile_grid)
 
         # Fan speed gauges - centered with vertical spacing
-        profile_layout.addSpacing(15)
+        profile_layout.addSpacing(20)
         gauge_layout = QHBoxLayout()
         gauge_layout.addStretch()
-        self.cpu_gauge = GaugeWidget("CPU Fan")
-        self.gpu_gauge = GaugeWidget("GPU Fan")
-        gauge_layout.addWidget(self.cpu_gauge)
-        gauge_layout.addSpacing(30)
-        gauge_layout.addWidget(self.gpu_gauge)
+        self.cpu_gauge = GaugeWidget("CPU Fan", accent_color="#2196F3")  # Blue
+        self.gpu_gauge = GaugeWidget("GPU Fan", accent_color="#FF9800")  # Orange
+        gauge_layout.addWidget(self.cpu_gauge, 0, Qt.AlignCenter)
+        gauge_layout.addSpacing(40)
+        gauge_layout.addWidget(self.gpu_gauge, 0, Qt.AlignCenter)
         gauge_layout.addStretch()
         profile_layout.addLayout(gauge_layout)
-        profile_layout.addSpacing(10)
+        profile_layout.addSpacing(15)
 
         profile_layout.addStretch()
-        tabs.addTab(profile_tab, "Profils Auto")
+        tabs.addTab(profile_tab, "Auto Profiles")
 
         # Tab 2: Manual control
         manual_tab = QWidget()
@@ -828,52 +972,117 @@ class FanControlGUI(QMainWindow):
         manual_layout.addWidget(apply_btn)
 
         manual_layout.addStretch()
-        tabs.addTab(manual_tab, "Manuel")
+        tabs.addTab(manual_tab, "Manual")
 
-        # Tab 3: EC Auto
+        # Tab 3: Power (new)
+        power_tab = QWidget()
+        power_layout = QVBoxLayout(power_tab)
+
+        # Power Profile section
+        power_profile_group = QGroupBox("Power Profile")
+        power_profile_layout = QVBoxLayout(power_profile_group)
+
+        power_desc = QLabel("Controls CPU energy, GPU power, and CPU boost:")
+        power_profile_layout.addWidget(power_desc)
+
+        # Power profile buttons
+        power_btn_layout = QHBoxLayout()
+        self.power_profile_buttons = {}
+        for name in ["Performance", "Balanced", "Power Saver"]:
+            btn = QPushButton(name)
+            btn.setMinimumHeight(40)
+            btn.clicked.connect(lambda checked, n=name: self.set_power_profile(n))
+            power_btn_layout.addWidget(btn)
+            self.power_profile_buttons[name] = btn
+        power_profile_layout.addLayout(power_btn_layout)
+
+        # Current power profile status
+        self.power_status_label = QLabel("Current: Balanced")
+        self.power_status_label.setStyleSheet("color: #2196F3;")
+        power_profile_layout.addWidget(self.power_status_label)
+
+        power_layout.addWidget(power_profile_group)
+
+        # CPU Boost
+        boost_group = QGroupBox("CPU Boost")
+        boost_layout_inner = QHBoxLayout(boost_group)
+        self.boost_check = QCheckBox("Turbo Boost")
+        self.boost_check.stateChanged.connect(self.toggle_boost)
+        boost_layout_inner.addWidget(self.boost_check)
+        self.boost_status = QLabel("ON")
+        self.boost_status.setFont(QFont("Cantarell", 10, QFont.Bold))
+        self.boost_status.setStyleSheet("color: green;")
+        boost_layout_inner.addWidget(self.boost_status)
+        power_layout.addWidget(boost_group)
+
+        self.check_boost()
+
+        # Battery section
+        battery_group = QGroupBox("Battery")
+        battery_layout_inner = QHBoxLayout(battery_group)
+        battery_layout_inner.addWidget(QLabel("Charge Limit:"))
+        self.battery_combo = QComboBox()
+        self.battery_combo.addItems(["60%", "80%", "100%"])
+        self.battery_combo.currentIndexChanged.connect(self.set_battery_limit)
+        battery_layout_inner.addWidget(self.battery_combo)
+        self.battery_status = QLabel("100%")
+        self.battery_status.setFont(QFont("Cantarell", 10, QFont.Bold))
+        battery_layout_inner.addWidget(self.battery_status)
+        power_layout.addWidget(battery_group)
+
+        # Read current battery limit
+        self.check_battery_limit()
+
+        # Settings section
+        settings_group = QGroupBox("Settings")
+        settings_layout = QVBoxLayout(settings_group)
+
+        # Autostart
+        self.autostart_check = QCheckBox("Start with system")
+        self.autostart_check.stateChanged.connect(self.toggle_autostart)
+        settings_layout.addWidget(self.autostart_check)
+        self.check_autostart()
+
+        # Temperature notifications
+        self.notify_check = QCheckBox("Temperature alerts (>85°C)")
+        self.notify_check.setChecked(True)
+        self.notify_check.stateChanged.connect(self.toggle_notifications)
+        settings_layout.addWidget(self.notify_check)
+
+        # Theme selector
+        theme_layout_inner = QHBoxLayout()
+        theme_layout_inner.addWidget(QLabel("Theme:"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["System", "Dark", "Light"])
+        self.theme_combo.currentIndexChanged.connect(self.change_theme)
+        theme_layout_inner.addWidget(self.theme_combo)
+        theme_layout_inner.addStretch()
+        settings_layout.addLayout(theme_layout_inner)
+
+        power_layout.addWidget(settings_group)
+
+        power_layout.addStretch()
+        tabs.addTab(power_tab, "Power")
+
+        # Tab 4: EC Auto
         auto_tab = QWidget()
         auto_layout = QVBoxLayout(auto_tab)
-        auto_desc = QLabel("Laisser le controleur embarque (EC) gerer les ventilateurs.\n\n"
-                          "C'est le mode par defaut du BIOS.")
+        auto_desc = QLabel("Let the embedded controller (EC) manage the fans.\n\n"
+                          "This is the BIOS default mode.")
         auto_layout.addWidget(auto_desc)
-        auto_btn = QPushButton("Activer Mode Auto EC")
+        auto_btn = QPushButton("Enable Auto EC Mode")
         auto_btn.clicked.connect(self.on_auto_mode)
         auto_layout.addWidget(auto_btn)
         auto_layout.addStretch()
         tabs.addTab(auto_tab, "Auto EC")
 
-        # CPU Boost
-        boost_group = QGroupBox("CPU Boost")
-        boost_layout = QHBoxLayout(boost_group)
-        self.boost_check = QCheckBox("Turbo Boost")
-        self.boost_check.stateChanged.connect(self.toggle_boost)
-        boost_layout.addWidget(self.boost_check)
-        self.boost_status = QLabel("ON")
-        self.boost_status.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        self.boost_status.setStyleSheet("color: green;")
-        boost_layout.addWidget(self.boost_status)
-        layout.addWidget(boost_group)
-
-        self.check_boost()
-
-        # Theme selector
-        theme_group = QGroupBox("Apparence")
-        theme_layout = QHBoxLayout(theme_group)
-        theme_layout.addWidget(QLabel("Theme:"))
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["Systeme", "Sombre", "Clair"])
-        self.theme_combo.currentIndexChanged.connect(self.change_theme)
-        theme_layout.addWidget(self.theme_combo)
-        layout.addWidget(theme_group)
-
-        # Load saved theme
-        self.settings = QSettings("ASUS", "FanControl")
+        # Load saved settings
         saved_theme = self.settings.value("theme", 0, type=int)
         self.theme_combo.setCurrentIndex(saved_theme)
         self.apply_theme(saved_theme)
 
         # Warning
-        warning = QLabel("Mode SILENT = surveillez les temperatures!")
+        warning = QLabel("SILENT mode = watch temperatures!")
         warning.setStyleSheet("color: orange;")
         layout.addWidget(warning)
 
@@ -903,7 +1112,7 @@ class FanControlGUI(QMainWindow):
         tray_menu.addSeparator()
 
         # Profiles submenu
-        profiles_menu = QMenu("Profils Auto", self)
+        profiles_menu = QMenu("Auto Profiles", self)
         for name in PROFILES.keys():
             action = QAction(name, self)
             action.triggered.connect(lambda checked, n=name: self.set_profile(n))
@@ -913,7 +1122,7 @@ class FanControlGUI(QMainWindow):
         tray_menu.addSeparator()
 
         # Manual presets
-        for name, percent in [("Manuel 100%", 100), ("Manuel 50%", 50), ("Manuel 30%", 30)]:
+        for name, percent in [("Manual 100%", 100), ("Manual 50%", 50), ("Manual 30%", 30)]:
             action = QAction(name, self)
             action.triggered.connect(lambda checked, p=percent: self.set_preset(p))
             tray_menu.addAction(action)
@@ -926,13 +1135,38 @@ class FanControlGUI(QMainWindow):
 
         tray_menu.addSeparator()
 
-        quit_action = QAction("Quitter", self)
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        tray_menu.addAction(about_action)
+
+        quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.quit_app)
         tray_menu.addAction(quit_action)
 
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
+
+    def setup_sleep_detection(self):
+        """Setup DBus listener for sleep/wake events from systemd-logind"""
+        try:
+            bus = dbus.SystemBus()
+            bus.add_signal_receiver(
+                self.on_sleep_wake,
+                signal_name='PrepareForSleep',
+                dbus_interface='org.freedesktop.login1.Manager',
+                bus_name='org.freedesktop.login1',
+                path='/org/freedesktop/login1'
+            )
+        except Exception as e:
+            print(f"Sleep detection unavailable: {e}")
+
+    def on_sleep_wake(self, sleeping):
+        """Handle sleep/wake events from systemd"""
+        if sleeping:
+            self.controller.prepare_for_sleep()
+        else:
+            self.controller.resume_from_sleep()
 
     def on_tray_activated(self, reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
@@ -975,6 +1209,10 @@ class FanControlGUI(QMainWindow):
         self.controller.stop()
         self.tray_icon.hide()
         QApplication.quit()
+
+    def show_about(self):
+        dialog = AboutDialog(self)
+        dialog.exec_()
 
     def update_temps(self, cpu, gpu):
         cpu_color = "green" if cpu < 60 else "orange" if cpu < 80 else "red"
@@ -1021,7 +1259,7 @@ class FanControlGUI(QMainWindow):
     def show_curve_menu(self, pos, profile_name, button):
         """Show context menu with option to view curve"""
         menu = QMenu(self)
-        show_curve_action = menu.addAction("Voir la courbe")
+        show_curve_action = menu.addAction("Show curve")
         action = menu.exec_(button.mapToGlobal(pos))
         if action == show_curve_action:
             dialog = CurveDialog(profile_name, self)
@@ -1064,15 +1302,113 @@ class FanControlGUI(QMainWindow):
 
     def apply_theme(self, index):
         app = QApplication.instance()
-        if index == 1:  # Sombre
+        if index == 1:  # Dark
             app.setStyleSheet(DARK_STYLE)
-        elif index == 2:  # Clair
+        elif index == 2:  # Light
             app.setStyleSheet(LIGHT_STYLE)
-        else:  # Systeme
+        else:  # System
             app.setStyleSheet(SYSTEM_STYLE)
+
+    def set_power_profile(self, name):
+        """Apply power profile: CPU energy + GPU power + CPU boost"""
+        profile = POWER_PROFILES.get(name)
+        if not profile:
+            return
+
+        # CPU Energy (all cores)
+        for cpu in range(16):
+            path = f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/energy_performance_preference"
+            subprocess.run(f"echo {profile['cpu_energy']} | sudo tee {path} > /dev/null",
+                          shell=True, capture_output=True)
+
+        # GPU Power
+        subprocess.run(f"echo {profile['gpu_power']} | sudo tee /sys/class/drm/card1/device/power_dpm_force_performance_level > /dev/null",
+                      shell=True, capture_output=True)
+
+        # CPU Boost
+        boost_val = "1" if profile['cpu_boost'] else "0"
+        subprocess.run(f"echo {boost_val} | sudo tee /sys/devices/system/cpu/cpufreq/boost > /dev/null",
+                      shell=True, capture_output=True)
+
+        # Update UI
+        self.boost_check.setChecked(profile['cpu_boost'])
+        self.power_status_label.setText(f"Current: {name}")
+        self.power_status_label.setStyleSheet(f"color: {profile['color']};")
+
+        # Save setting
+        self.settings.setValue("power_profile", name)
+
+    def set_battery_limit(self, index):
+        """Set battery charge limit"""
+        limits = [60, 80, 100]
+        value = limits[index]
+        result = subprocess.run(f"echo {value} | sudo tee /sys/class/power_supply/BAT0/charge_control_end_threshold > /dev/null",
+                               shell=True, capture_output=True)
+        if result.returncode == 0:
+            self.battery_status.setText(f"{value}%")
+            self.settings.setValue("battery_limit", index)
+
+    def check_battery_limit(self):
+        """Read current battery charge limit"""
+        try:
+            with open('/sys/class/power_supply/BAT0/charge_control_end_threshold', 'r') as f:
+                value = int(f.read().strip())
+                self.battery_status.setText(f"{value}%")
+                # Set combo to matching value
+                limits = [60, 80, 100]
+                if value in limits:
+                    self.battery_combo.setCurrentIndex(limits.index(value))
+        except:
+            self.battery_status.setText("N/A")
+
+    def toggle_autostart(self, state):
+        """Enable or disable autostart"""
+        desktop_path = os.path.expanduser("~/.config/autostart/fanctl-gui.desktop")
+        if state == Qt.Checked:
+            content = """[Desktop Entry]
+Type=Application
+Name=ASUS Fan Control
+Exec=/usr/local/bin/fanctl-gui
+Icon=preferences-system
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+"""
+            os.makedirs(os.path.dirname(desktop_path), exist_ok=True)
+            with open(desktop_path, 'w') as f:
+                f.write(content)
+        else:
+            if os.path.exists(desktop_path):
+                os.remove(desktop_path)
+
+    def check_autostart(self):
+        """Check if autostart is enabled"""
+        desktop_path = os.path.expanduser("~/.config/autostart/fanctl-gui.desktop")
+        self.autostart_check.setChecked(os.path.exists(desktop_path))
+
+    def toggle_notifications(self, state):
+        """Enable or disable temperature notifications"""
+        self.controller.notification_enabled = (state == Qt.Checked)
+        self.settings.setValue("notifications", state == Qt.Checked)
+
+    def show_temp_warning(self, component, temp):
+        """Show temperature warning notification"""
+        self.tray_icon.showMessage(
+            "Temperature Warning",
+            f"{component} at {temp}°C!",
+            QSystemTrayIcon.Warning,
+            5000
+        )
 
 
 def main():
+    # DBus Qt integration MUST be before QApplication
+    DBusQtMainLoop(set_as_default=True)
+
+    # Enable high DPI scaling attributes (Qt 5.6+)
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
