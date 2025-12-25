@@ -12,6 +12,14 @@ import os
 import dbus
 from dbus.mainloop.pyqt5 import DBusQtMainLoop
 
+# Logging
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+LOG_DIR = Path.home() / ".local/share/fanctl"
+LOG_FILE = LOG_DIR / "fanctl.log"
+
 # Enable HiDPI scaling for Qt5 (must be before QApplication)
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
@@ -423,7 +431,7 @@ class AboutDialog(QDialog):
         layout.addWidget(title)
 
         # Version
-        version = QLabel("Version 1.2")
+        version = QLabel("Version 1.3")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
 
@@ -599,6 +607,48 @@ class FanController(QObject):
         self.last_profile = "Balanced"
         self.last_manual_cpu = 50
         self.last_manual_gpu = 50
+        # Logging
+        self.verbose_until = 0
+        self.setup_logging()
+
+    def setup_logging(self):
+        """Initialize logging system"""
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        self.logger = logging.getLogger("fanctl")
+        self.logger.setLevel(logging.INFO)
+        # Prevent duplicate handlers on restart
+        if not self.logger.handlers:
+            handler = RotatingFileHandler(
+                LOG_FILE, maxBytes=1_000_000, backupCount=2
+            )
+            handler.setFormatter(logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            ))
+            self.logger.addHandler(handler)
+        self.log("App started")
+
+    def log(self, message, level="info", verbose_only=False):
+        """Log message. verbose_only=True logs only in verbose mode."""
+        if verbose_only and time.time() > self.verbose_until:
+            return
+        getattr(self.logger, level)(message)
+
+    def enable_verbose(self, hours):
+        """Enable verbose logging for N hours"""
+        self.verbose_until = time.time() + (hours * 3600)
+        self.logger.setLevel(logging.DEBUG)
+        self.log(f"Verbose logging enabled for {hours}h")
+
+    def disable_verbose(self):
+        """Disable verbose logging"""
+        self.verbose_until = 0
+        self.logger.setLevel(logging.INFO)
+        self.log("Verbose logging disabled")
+
+    def is_verbose(self):
+        """Check if verbose logging is active"""
+        return time.time() < self.verbose_until
 
     def run_cmd(self, cmd):
         try:
@@ -652,9 +702,11 @@ class FanController(QObject):
 
         if self.cpu_temp > TEMP_WARNING_THRESHOLD:
             self.last_notification_time = current_time
+            self.log(f"Temperature warning: CPU at {self.cpu_temp}°C", level="warning")
             self.temp_warning.emit("CPU", self.cpu_temp)
         elif self.gpu_temp > TEMP_WARNING_THRESHOLD:
             self.last_notification_time = current_time
+            self.log(f"Temperature warning: GPU at {self.gpu_temp}°C", level="warning")
             self.temp_warning.emit("GPU", self.gpu_temp)
 
     def read_fan_duty(self):
@@ -707,6 +759,7 @@ class FanController(QObject):
 
     def control_loop(self):
         """Main control loop - handles both manual and profile modes"""
+        log_counter = 0
         while self.running:
             self.read_temps()
             self.read_fan_duty()
@@ -714,6 +767,11 @@ class FanController(QObject):
             if self.mode == "manual":
                 self.enable_manual()
                 self.set_fans(self.cpu_percent, self.gpu_percent)
+                # Verbose log every ~5 seconds (50 iterations at 0.1s)
+                log_counter += 1
+                if log_counter >= 50:
+                    self.log(f"CPU:{self.cpu_temp}°C GPU:{self.gpu_temp}°C Fan:{self.cpu_percent}%/{self.gpu_percent}%", verbose_only=True)
+                    log_counter = 0
                 time.sleep(0.1)
 
             elif self.mode == "profile":
@@ -734,10 +792,21 @@ class FanController(QObject):
                 self.enable_manual()
                 self.set_fans(cpu_speed, gpu_speed)
 
+                # Verbose log every ~5 seconds (10 iterations at 0.5s)
+                log_counter += 1
+                if log_counter >= 10:
+                    self.log(f"CPU:{self.cpu_temp}°C GPU:{self.gpu_temp}°C Fan:{cpu_speed}%/{gpu_speed}%", verbose_only=True)
+                    log_counter = 0
+
                 self.status_changed.emit(f"{self.profile_name} - CPU:{cpu_speed}% GPU:{gpu_speed}%")
                 time.sleep(0.5)  # Profile mode can be slower
 
             else:  # auto mode
+                # Verbose log every ~5 seconds
+                log_counter += 1
+                if log_counter >= 5:
+                    self.log(f"Auto mode - CPU:{self.cpu_temp}°C GPU:{self.gpu_temp}°C", verbose_only=True)
+                    log_counter = 0
                 time.sleep(1)
 
     def start_control(self):
@@ -749,6 +818,7 @@ class FanController(QObject):
         self.mode = "manual"
         self.cpu_percent = cpu
         self.gpu_percent = gpu
+        self.log(f"Manual mode: CPU={cpu}% GPU={gpu}%")
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 0' | sudo tee /proc/acpi/call > /dev/null")
         time.sleep(0.3)
@@ -762,6 +832,7 @@ class FanController(QObject):
     def set_profile(self, profile_name):
         self.mode = "profile"
         self.profile_name = profile_name
+        self.log(f"Profile changed to {profile_name}")
         # Reset hysteresis state to apply new profile immediately
         self.last_cpu_speed = 0
         self.last_gpu_speed = 0
@@ -772,15 +843,18 @@ class FanController(QObject):
 
     def set_auto(self):
         self.mode = "auto"
+        self.log("Auto mode (EC control)")
         self.disable_manual()
         self.run_cmd("echo 1 | sudo tee /sys/devices/platform/h5600_fan/thermal_policy > /dev/null 2>&1")
         self.status_changed.emit("Automatic (EC)")
 
     def stop(self):
+        self.log("App stopped")
         self.running = False
 
     def prepare_for_sleep(self):
         """Called before system suspend - save state and return to EC control"""
+        self.log("Preparing for sleep")
         # Save current state
         self.last_mode = self.mode
         self.last_profile = self.profile_name
@@ -795,6 +869,7 @@ class FanController(QObject):
 
     def resume_from_sleep(self):
         """Called after system resumes - restore previous mode"""
+        self.log(f"Resumed from sleep, restoring {self.last_mode}")
         self.running = True
         # Restore previous mode
         if self.last_mode == "profile":
@@ -1060,6 +1135,26 @@ class FanControlGUI(QMainWindow):
         settings_layout.addLayout(theme_layout_inner)
 
         power_layout.addWidget(settings_group)
+
+        # Logging section
+        log_group = QGroupBox("Logging")
+        log_layout = QHBoxLayout(log_group)
+
+        log_layout.addWidget(QLabel("Verbose:"))
+        self.verbose_combo = QComboBox()
+        self.verbose_combo.addItems(["Off", "1h", "2h", "5h", "12h", "24h"])
+        log_layout.addWidget(self.verbose_combo)
+
+        self.verbose_btn = QPushButton("Enable")
+        self.verbose_btn.clicked.connect(self.toggle_verbose_logging)
+        log_layout.addWidget(self.verbose_btn)
+
+        self.open_log_btn = QPushButton("Open Log")
+        self.open_log_btn.clicked.connect(self.open_log_folder)
+        log_layout.addWidget(self.open_log_btn)
+
+        log_layout.addStretch()
+        power_layout.addWidget(log_group)
 
         power_layout.addStretch()
         tabs.addTab(power_tab, "Power")
@@ -1399,6 +1494,27 @@ X-GNOME-Autostart-enabled=true
             QSystemTrayIcon.Warning,
             5000
         )
+
+    def toggle_verbose_logging(self):
+        """Enable or disable verbose logging"""
+        combo_text = self.verbose_combo.currentText()
+        if combo_text == "Off" or self.controller.is_verbose():
+            # Disable verbose
+            self.controller.disable_verbose()
+            self.verbose_btn.setText("Enable")
+            self.verbose_combo.setEnabled(True)
+        else:
+            # Enable verbose for selected duration
+            hours = int(combo_text.replace("h", ""))
+            self.controller.enable_verbose(hours)
+            self.verbose_btn.setText("Disable")
+            self.verbose_combo.setEnabled(False)
+
+    def open_log_folder(self):
+        """Open log folder in file manager"""
+        import subprocess
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(["xdg-open", str(LOG_DIR)])
 
 
 def main():
