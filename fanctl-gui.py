@@ -164,6 +164,30 @@ QComboBox QAbstractItemView {
 }
 """
 
+# System theme: only layout properties, colors from system
+SYSTEM_STYLE = """
+QGroupBox {
+    margin-top: 10px;
+    padding-top: 10px;
+}
+QPushButton {
+    padding: 8px;
+}
+QSlider::groove:horizontal {
+    height: 8px;
+}
+QSlider::handle:horizontal {
+    width: 18px;
+    margin: -5px 0;
+}
+QTabBar::tab {
+    padding: 8px 16px;
+}
+QComboBox {
+    padding: 4px;
+}
+"""
+
 # Fan curve profiles: (temp_threshold, fan_percent)
 # Separate curves for CPU and GPU - GPU needs slightly more cooling at high temps
 # Based on ASUS recommendations: GPU min 34% at 70C vs CPU 31%
@@ -1045,7 +1069,7 @@ class FanControlGUI(QMainWindow):
         elif index == 2:  # Clair
             app.setStyleSheet(LIGHT_STYLE)
         else:  # Systeme
-            app.setStyleSheet("")
+            app.setStyleSheet(SYSTEM_STYLE)
 
 
 def main():
