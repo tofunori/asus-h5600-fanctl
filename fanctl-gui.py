@@ -552,6 +552,11 @@ class FanController(QObject):
     def set_profile(self, profile_name):
         self.mode = "profile"
         self.profile_name = profile_name
+        # Reset hysteresis state to apply new profile immediately
+        self.last_cpu_speed = 0
+        self.last_gpu_speed = 0
+        self.last_cpu_temp = 0
+        self.last_gpu_temp = 0
         self.start_control()
         self.status_changed.emit(f"{profile_name} - En attente...")
 
