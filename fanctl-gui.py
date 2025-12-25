@@ -90,7 +90,79 @@ QComboBox QAbstractItemView {
 }
 """
 
-LIGHT_STYLE = ""  # Use system default
+LIGHT_STYLE = """
+QMainWindow, QWidget {
+    background-color: #f5f5f5;
+    color: #1e1e1e;
+}
+QGroupBox {
+    border: 1px solid #c0c0c0;
+    border-radius: 5px;
+    margin-top: 10px;
+    padding-top: 10px;
+    background-color: #ffffff;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    color: #1e1e1e;
+}
+QPushButton {
+    background-color: #e0e0e0;
+    border: 1px solid #c0c0c0;
+    border-radius: 4px;
+    padding: 8px;
+    color: #1e1e1e;
+}
+QPushButton:hover {
+    background-color: #d0d0d0;
+}
+QPushButton:pressed {
+    background-color: #c0c0c0;
+}
+QSlider::groove:horizontal {
+    background: #c0c0c0;
+    height: 8px;
+    border-radius: 4px;
+}
+QSlider::handle:horizontal {
+    background: #0078d4;
+    width: 18px;
+    margin: -5px 0;
+    border-radius: 9px;
+}
+QTabWidget::pane {
+    border: 1px solid #c0c0c0;
+    background-color: #ffffff;
+}
+QTabBar::tab {
+    background-color: #e8e8e8;
+    color: #1e1e1e;
+    padding: 8px 16px;
+    border: 1px solid #c0c0c0;
+}
+QTabBar::tab:selected {
+    background-color: #ffffff;
+}
+QCheckBox {
+    color: #1e1e1e;
+}
+QComboBox {
+    background-color: #ffffff;
+    border: 1px solid #c0c0c0;
+    border-radius: 4px;
+    padding: 4px;
+    color: #1e1e1e;
+}
+QComboBox::drop-down {
+    border: none;
+}
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    selection-background-color: #0078d4;
+}
+"""
 
 # Fan curve profiles: (temp_threshold, fan_percent)
 # Separate curves for CPU and GPU - GPU needs slightly more cooling at high temps
