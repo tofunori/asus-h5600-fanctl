@@ -11,7 +11,7 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox,
                              QGroupBox, QRadioButton, QSystemTrayIcon, QMenu, QAction,
-                             QComboBox, QTabWidget, QSpinBox, QGridLayout, QDialog)
+                             QComboBox, QTabWidget, QSpinBox, QGridLayout, QDialog, QToolTip)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QSettings, QPointF
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QPainterPath, QBrush
 
@@ -133,12 +133,14 @@ PROFILE_COLORS = {
 
 
 class CurveWidget(QWidget):
-    """Widget to draw fan curve visualization"""
+    """Widget to draw fan curve visualization with hover tooltips"""
     def __init__(self, profile_name, curve_data, parent=None):
         super().__init__(parent)
         self.profile_name = profile_name
         self.curve_data = curve_data
         self.setFixedSize(350, 250)
+        self.setMouseTracking(True)
+        self.point_data = []  # Store (QPointF, temp, fan_pct) for tooltips
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -203,11 +205,14 @@ class CurveWidget(QWidget):
         # Create path for the curve
         path = QPainterPath()
         points = []
+        self.point_data = []  # Reset for tooltips
 
         for temp, fan_pct in self.curve_data:
             x = left_margin + (temp / 100.0) * width
             y = top_margin + height - (fan_pct / 100.0) * height
-            points.append(QPointF(x, y))
+            point = QPointF(x, y)
+            points.append(point)
+            self.point_data.append((point, temp, fan_pct))
 
         if points:
             path.moveTo(points[0])
@@ -235,6 +240,16 @@ class CurveWidget(QWidget):
         for point in points:
             painter.drawEllipse(point, 5, 5)
 
+    def mouseMoveEvent(self, event):
+        """Show tooltip when hovering over curve points"""
+        pos = event.pos()
+        for point, temp, fan_pct in self.point_data:
+            # Check if mouse is within 10px radius of point
+            if (pos.x() - point.x())**2 + (pos.y() - point.y())**2 <= 100:
+                QToolTip.showText(event.globalPos(), f"{temp}°C → {fan_pct}%")
+                return
+        QToolTip.hideText()
+
 
 class CurveDialog(QDialog):
     """Dialog to show fan curve visualization"""
@@ -261,12 +276,12 @@ class CurveDialog(QDialog):
 
 
 class GaugeWidget(QWidget):
-    """Gauge widget with needle for fan speed display"""
+    """Modern gauge widget with needle for fan speed display"""
     def __init__(self, title="Fan", parent=None):
         super().__init__(parent)
         self.title = title
         self.value = 0
-        self.setFixedSize(90, 90)
+        self.setFixedSize(140, 140)
 
     def setValue(self, value):
         self.value = max(0, min(100, value))
@@ -276,62 +291,98 @@ class GaugeWidget(QWidget):
         import math
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
 
         # Colors based on theme
         is_dark = self.palette().window().color().lightness() < 128
-        bg_color = QColor("#2a2a2a") if is_dark else QColor("#f5f5f5")
-        arc_bg = QColor("#3a3a3a") if is_dark else QColor("#ddd")
-        text_color = QColor("#e0e0e0") if is_dark else QColor("#333")
+        bg_color = QColor("#1e1e1e") if is_dark else QColor("#ffffff")
+        arc_bg = QColor("#3a3a3a") if is_dark else QColor("#e0e0e0")
+        text_color = QColor("#ffffff") if is_dark else QColor("#333333")
+        subtle_text = QColor("#888888") if is_dark else QColor("#666666")
 
         # Dimensions
         w, h = self.width(), self.height()
-        cx, cy = w // 2, h // 2 + 5
-        radius = 35
+        cx, cy = w // 2, h // 2 + 8
+        radius = 50
 
-        # Draw background arc (220 degrees, from 160° to -60°)
-        pen = QPen(arc_bg, 8, Qt.SolidLine, Qt.RoundCap)
+        # Draw outer glow/shadow ring
+        glow_rect = self.rect().adjusted(8, 8, -8, -8)
+        pen = QPen(QColor("#252525") if is_dark else QColor("#f0f0f0"), 14, Qt.SolidLine, Qt.RoundCap)
         painter.setPen(pen)
-        rect = self.rect().adjusted(15, 15, -15, -15)
-        painter.drawArc(rect, 220 * 16, -220 * 16)
+        painter.drawArc(glow_rect, 225 * 16, -270 * 16)
 
-        # Draw colored arc based on value (green->yellow->red)
-        if self.value <= 50:
+        # Draw background arc (270 degrees)
+        arc_rect = self.rect().adjusted(15, 15, -15, -15)
+        pen = QPen(arc_bg, 10, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(arc_rect, 225 * 16, -270 * 16)
+
+        # Draw colored arc based on value with gradient effect
+        if self.value <= 30:
+            color = QColor("#00E676")  # Bright green
+        elif self.value <= 50:
             color = QColor("#4CAF50")  # Green
-        elif self.value <= 75:
-            color = QColor("#FFC107")  # Yellow
+        elif self.value <= 70:
+            color = QColor("#FFEB3B")  # Yellow
+        elif self.value <= 85:
+            color = QColor("#FF9800")  # Orange
         else:
             color = QColor("#F44336")  # Red
 
-        pen = QPen(color, 8, Qt.SolidLine, Qt.RoundCap)
+        pen = QPen(color, 10, Qt.SolidLine, Qt.RoundCap)
         painter.setPen(pen)
-        arc_span = int(-220 * self.value / 100)
-        painter.drawArc(rect, 220 * 16, arc_span * 16)
+        arc_span = int(-270 * self.value / 100)
+        painter.drawArc(arc_rect, 225 * 16, arc_span * 16)
+
+        # Draw tick marks
+        painter.setPen(QPen(subtle_text, 1))
+        for i in range(0, 101, 25):
+            angle = math.radians(225 - (270 * i / 100))
+            inner_r = radius - 18
+            outer_r = radius - 12
+            x1 = cx + inner_r * math.cos(angle)
+            y1 = cy - inner_r * math.sin(angle)
+            x2 = cx + outer_r * math.cos(angle)
+            y2 = cy - outer_r * math.sin(angle)
+            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
 
         # Draw needle
-        angle = math.radians(220 - (220 * self.value / 100))
-        needle_len = radius - 8
+        angle = math.radians(225 - (270 * self.value / 100))
+        needle_len = radius - 22
+
+        # Needle shadow
+        painter.setPen(QPen(QColor(0, 0, 0, 50), 4, Qt.SolidLine, Qt.RoundCap))
+        nx = cx + needle_len * math.cos(angle) + 1
+        ny = cy - needle_len * math.sin(angle) + 1
+        painter.drawLine(cx + 1, cy + 1, int(nx), int(ny))
+
+        # Needle
+        painter.setPen(QPen(color, 3, Qt.SolidLine, Qt.RoundCap))
         nx = cx + needle_len * math.cos(angle)
         ny = cy - needle_len * math.sin(angle)
-
-        pen = QPen(QColor("#0078d4"), 2)
-        painter.setPen(pen)
         painter.drawLine(cx, cy, int(nx), int(ny))
 
-        # Draw center dot
-        painter.setBrush(QBrush(QColor("#0078d4")))
+        # Draw center circle
+        painter.setBrush(QBrush(QColor("#2d2d2d") if is_dark else QColor("#ffffff")))
+        painter.setPen(QPen(color, 2))
+        painter.drawEllipse(cx - 8, cy - 8, 16, 16)
+
+        # Draw inner dot
+        painter.setBrush(QBrush(color))
         painter.setPen(Qt.NoPen)
         painter.drawEllipse(cx - 4, cy - 4, 8, 8)
 
-        # Draw title
-        painter.setPen(QPen(text_color))
-        font = QFont("Segoe UI", 8)
+        # Draw title at top
+        painter.setPen(QPen(subtle_text))
+        font = QFont("Segoe UI", 9)
         painter.setFont(font)
-        painter.drawText(self.rect().adjusted(0, 5, 0, 0), Qt.AlignHCenter | Qt.AlignTop, self.title)
+        painter.drawText(self.rect().adjusted(0, 8, 0, 0), Qt.AlignHCenter | Qt.AlignTop, self.title)
 
-        # Draw value
-        font = QFont("Segoe UI", 11, QFont.Bold)
+        # Draw large value in center-bottom (with margin from edge)
+        painter.setPen(QPen(text_color))
+        font = QFont("Segoe UI", 15, QFont.Bold)
         painter.setFont(font)
-        painter.drawText(self.rect().adjusted(0, 0, 0, -5), Qt.AlignHCenter | Qt.AlignBottom, f"{self.value}%")
+        painter.drawText(self.rect().adjusted(0, 10, 0, -5), Qt.AlignHCenter | Qt.AlignBottom, f"{self.value}%")
 
 
 class FanController(QObject):
@@ -611,16 +662,18 @@ class FanControlGUI(QMainWindow):
 
         profile_layout.addLayout(profile_grid)
 
-        # Fan speed gauges
+        # Fan speed gauges - centered with vertical spacing
+        profile_layout.addSpacing(15)
         gauge_layout = QHBoxLayout()
         gauge_layout.addStretch()
         self.cpu_gauge = GaugeWidget("CPU Fan")
         self.gpu_gauge = GaugeWidget("GPU Fan")
         gauge_layout.addWidget(self.cpu_gauge)
-        gauge_layout.addSpacing(20)
+        gauge_layout.addSpacing(30)
         gauge_layout.addWidget(self.gpu_gauge)
         gauge_layout.addStretch()
         profile_layout.addLayout(gauge_layout)
+        profile_layout.addSpacing(10)
 
         profile_layout.addStretch()
         tabs.addTab(profile_tab, "Profils Auto")
