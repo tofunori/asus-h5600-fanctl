@@ -9,6 +9,7 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 - **Manual fan control** - Set fan speed from 10% to 100%
 - **Separate CPU/GPU control** - Control each fan independently
 - **5 preset profiles** - Silent, Quiet, Balanced, Performance, Turbo
+- **Custom fan curves** - Create your own curves with drag & drop editor (like g-helper)
 - **Curve visualization** - Right-click on profiles to see the fan curve graph
 
 ### Power Management
@@ -24,6 +25,7 @@ Control both CPU and GPU fans on ASUS ProArt StudioBook H5600QM under Linux.
 - **Temperature alerts** - Notification when CPU/GPU exceeds 85°C
 - **Autostart option** - Start with system from settings
 - **HiDPI support** - Sharp rendering on high-resolution displays
+- **Logging** - Minimal logging always on, verbose mode on-demand for debugging
 - **GUI and CLI** - Both graphical and command-line interfaces
 
 ## Supported Hardware
@@ -137,6 +139,7 @@ fanctl-gui
 - Autostart toggle
 - Temperature alerts toggle
 - Theme selector (System/Dark/Light)
+- Verbose logging: Enable for 1h/2h/5h/12h/24h to debug temperature/fan behavior
 
 ## Automatic Fan Profiles
 
@@ -167,6 +170,21 @@ These control:
 - `/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference`
 - `/sys/class/drm/card1/device/power_dpm_force_performance_level`
 - `/sys/devices/system/cpu/cpufreq/boost`
+
+## Custom Fan Curves
+
+Create your own fan curves with the drag & drop editor (similar to g-helper on Windows):
+
+1. Go to the **Custom** tab
+2. Click **New** to create a new curve
+3. Name your curve
+4. **Drag points** to adjust the temperature-to-fan-speed mapping
+5. **Double-click** on the graph to add new points
+6. **Right-click** on a point to delete it
+7. Edit **CPU and GPU curves separately** for fine-grained control
+8. Click **Save**, then **Apply** to activate
+
+Custom curves are saved in `~/.config/ASUS/FanControl.conf` and persist across restarts.
 
 ## How It Works
 

@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import os
+import json
 
 # DBus for sleep/wake detection (must be before Qt imports)
 import dbus
@@ -28,7 +29,8 @@ os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox,
                              QGroupBox, QRadioButton, QSystemTrayIcon, QMenu, QAction,
-                             QComboBox, QTabWidget, QSpinBox, QGridLayout, QDialog, QToolTip)
+                             QComboBox, QTabWidget, QSpinBox, QGridLayout, QDialog, QToolTip,
+                             QLineEdit, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QSettings, QPointF
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QPainterPath, QBrush
 
@@ -414,6 +416,260 @@ class CurveDialog(QDialog):
         layout.addWidget(close_btn)
 
 
+class CurveEditorWidget(QWidget):
+    """Interactive curve editor with drag & drop points"""
+    curve_changed = pyqtSignal(list)
+
+    def __init__(self, curve_data, color="#2196F3", title="Fan Curve", parent=None):
+        super().__init__(parent)
+        self.curve_data = sorted([list(p) for p in curve_data])  # [[temp, fan%], ...]
+        self.color = QColor(color)
+        self.title = title
+        self.selected_point = None
+        self.hover_point = None
+        self.dragging = False
+        self.setFixedSize(220, 200)
+        self.setMouseTracking(True)
+
+        # Drawing margins
+        self.left_margin = 35
+        self.right_margin = 15
+        self.top_margin = 25
+        self.bottom_margin = 30
+
+    def get_draw_area(self):
+        """Return drawing area dimensions"""
+        w = self.width() - self.left_margin - self.right_margin
+        h = self.height() - self.top_margin - self.bottom_margin
+        return w, h
+
+    def temp_to_x(self, temp):
+        """Convert temperature to x coordinate"""
+        w, _ = self.get_draw_area()
+        return self.left_margin + (temp / 100.0) * w
+
+    def fan_to_y(self, fan):
+        """Convert fan percentage to y coordinate"""
+        _, h = self.get_draw_area()
+        return self.top_margin + h - (fan / 100.0) * h
+
+    def x_to_temp(self, x):
+        """Convert x coordinate to temperature"""
+        w, _ = self.get_draw_area()
+        temp = ((x - self.left_margin) / w) * 100
+        return max(0, min(100, int(temp)))
+
+    def y_to_fan(self, y):
+        """Convert y coordinate to fan percentage"""
+        _, h = self.get_draw_area()
+        fan = ((self.top_margin + h - y) / h) * 100
+        return max(0, min(100, int(fan)))
+
+    def find_point_at(self, pos, radius=12):
+        """Find curve point near position"""
+        for i, (temp, fan) in enumerate(self.curve_data):
+            px, py = self.temp_to_x(temp), self.fan_to_y(fan)
+            if (pos.x() - px)**2 + (pos.y() - py)**2 <= radius**2:
+                return i
+        return None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w, h = self.get_draw_area()
+        is_dark = self.palette().window().color().lightness() < 128
+        bg_color = QColor("#2a2a2a") if is_dark else QColor("#ffffff")
+        grid_color = QColor("#404040") if is_dark else QColor("#e0e0e0")
+        text_color = QColor("#e0e0e0") if is_dark else QColor("#333333")
+
+        painter.fillRect(self.rect(), bg_color)
+
+        # Title
+        painter.setPen(QPen(text_color))
+        painter.setFont(QFont("Cantarell", 9, QFont.Bold))
+        painter.drawText(self.left_margin, 15, self.title)
+
+        # Grid
+        painter.setPen(QPen(grid_color, 1, Qt.DotLine))
+        for i in range(5):
+            y = self.top_margin + h - (i * h / 4)
+            painter.drawLine(self.left_margin, int(y), self.left_margin + w, int(y))
+        for i in range(6):
+            x = self.left_margin + (i * w / 5)
+            painter.drawLine(int(x), self.top_margin, int(x), self.top_margin + h)
+
+        # Axis labels
+        painter.setPen(QPen(text_color))
+        painter.setFont(QFont("Cantarell", 7))
+        for i in range(5):
+            y = self.top_margin + h - (i * h / 4)
+            painter.drawText(2, int(y) + 3, f"{i * 25}%")
+        for i, temp in enumerate([0, 20, 40, 60, 80, 100]):
+            x = self.left_margin + (i * w / 5)
+            painter.drawText(int(x) - 8, self.top_margin + h + 12, f"{temp}°")
+
+        # Curve path
+        if len(self.curve_data) >= 2:
+            path = QPainterPath()
+            points = [(self.temp_to_x(t), self.fan_to_y(f)) for t, f in self.curve_data]
+            path.moveTo(points[0][0], points[0][1])
+            for x, y in points[1:]:
+                path.lineTo(x, y)
+
+            # Fill
+            fill_path = QPainterPath(path)
+            fill_path.lineTo(points[-1][0], self.top_margin + h)
+            fill_path.lineTo(points[0][0], self.top_margin + h)
+            fill_path.closeSubpath()
+            fill_color = QColor(self.color)
+            fill_color.setAlpha(40)
+            painter.fillPath(fill_path, QBrush(fill_color))
+
+            # Line
+            painter.setPen(QPen(self.color, 2))
+            painter.drawPath(path)
+
+        # Points
+        for i, (temp, fan) in enumerate(self.curve_data):
+            px, py = self.temp_to_x(temp), self.fan_to_y(fan)
+            if i == self.selected_point or i == self.hover_point:
+                painter.setBrush(QBrush(self.color))
+                painter.setPen(QPen(Qt.white, 2))
+                painter.drawEllipse(QPointF(px, py), 7, 7)
+            else:
+                painter.setBrush(QBrush(self.color))
+                painter.setPen(QPen(Qt.white, 1))
+                painter.drawEllipse(QPointF(px, py), 5, 5)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            idx = self.find_point_at(event.pos())
+            if idx is not None:
+                self.selected_point = idx
+                self.dragging = True
+            else:
+                # Add new point on double-click handled separately
+                pass
+            self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            idx = self.find_point_at(event.pos())
+            if idx is None:
+                # Add new point
+                temp = self.x_to_temp(event.pos().x())
+                fan = self.y_to_fan(event.pos().y())
+                self.curve_data.append([temp, fan])
+                self.curve_data.sort(key=lambda p: p[0])
+                self.curve_changed.emit(self.curve_data)
+                self.update()
+
+    def mouseMoveEvent(self, event):
+        if self.dragging and self.selected_point is not None:
+            temp = self.x_to_temp(event.pos().x())
+            fan = self.y_to_fan(event.pos().y())
+            self.curve_data[self.selected_point] = [temp, fan]
+            self.curve_data.sort(key=lambda p: p[0])
+            # Find new index after sort
+            for i, (t, f) in enumerate(self.curve_data):
+                if t == temp and f == fan:
+                    self.selected_point = i
+                    break
+            self.update()
+        else:
+            # Hover effect
+            idx = self.find_point_at(event.pos())
+            if idx != self.hover_point:
+                self.hover_point = idx
+                self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.dragging:
+            self.dragging = False
+            self.curve_changed.emit(self.curve_data)
+            self.update()
+
+    def contextMenuEvent(self, event):
+        idx = self.find_point_at(event.pos())
+        if idx is not None and len(self.curve_data) > 2:
+            menu = QMenu(self)
+            delete_action = menu.addAction("Delete point")
+            action = menu.exec_(event.globalPos())
+            if action == delete_action:
+                del self.curve_data[idx]
+                self.selected_point = None
+                self.curve_changed.emit(self.curve_data)
+                self.update()
+
+
+class CustomCurveDialog(QDialog):
+    """Dialog to create/edit custom fan curves"""
+    def __init__(self, curve_name="", curve_data=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Custom Curve")
+        self.setFixedSize(500, 320)
+
+        if curve_data is None:
+            curve_data = {
+                "cpu": [[0, 0], [50, 0], [60, 20], [70, 40], [80, 70], [90, 100]],
+                "gpu": [[0, 0], [50, 0], [60, 25], [70, 45], [80, 75], [90, 100]]
+            }
+
+        layout = QVBoxLayout(self)
+
+        # Name input
+        name_layout = QHBoxLayout()
+        name_layout.addWidget(QLabel("Name:"))
+        self.name_input = QLineEdit(curve_name)
+        self.name_input.setPlaceholderText("Enter curve name...")
+        name_layout.addWidget(self.name_input)
+        layout.addLayout(name_layout)
+
+        # Curve editors side by side
+        editors_layout = QHBoxLayout()
+
+        # CPU editor
+        cpu_group = QGroupBox("CPU Fan")
+        cpu_layout = QVBoxLayout(cpu_group)
+        self.cpu_editor = CurveEditorWidget(curve_data["cpu"], "#2196F3", "CPU Curve")
+        cpu_layout.addWidget(self.cpu_editor)
+        editors_layout.addWidget(cpu_group)
+
+        # GPU editor
+        gpu_group = QGroupBox("GPU Fan")
+        gpu_layout = QVBoxLayout(gpu_group)
+        self.gpu_editor = CurveEditorWidget(curve_data["gpu"], "#FF9800", "GPU Curve")
+        gpu_layout.addWidget(self.gpu_editor)
+        editors_layout.addWidget(gpu_group)
+
+        layout.addLayout(editors_layout)
+
+        # Help text
+        help_label = QLabel("Drag points to adjust • Double-click to add • Right-click to delete")
+        help_label.setStyleSheet("color: gray; font-size: 10px;")
+        help_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(help_label)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
+
+    def get_curve_data(self):
+        return {
+            "name": self.name_input.text().strip(),
+            "cpu": self.cpu_editor.curve_data,
+            "gpu": self.gpu_editor.curve_data
+        }
+
+
 class AboutDialog(QDialog):
     """About dialog with project info and contact"""
     def __init__(self, parent=None):
@@ -431,7 +687,7 @@ class AboutDialog(QDialog):
         layout.addWidget(title)
 
         # Version
-        version = QLabel("Version 1.3")
+        version = QLabel("Version 1.4")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
 
@@ -610,6 +866,8 @@ class FanController(QObject):
         # Logging
         self.verbose_until = 0
         self.setup_logging()
+        # Custom curve data (set when using Custom: profiles)
+        self.custom_curve_data = None
 
     def setup_logging(self):
         """Initialize logging system"""
@@ -775,7 +1033,11 @@ class FanController(QObject):
                 time.sleep(0.1)
 
             elif self.mode == "profile":
-                profile = PROFILES.get(self.profile_name, PROFILES["Balanced"])
+                # Use custom curve data if available, otherwise use built-in profiles
+                if self.custom_curve_data:
+                    profile = self.custom_curve_data
+                else:
+                    profile = PROFILES.get(self.profile_name, PROFILES["Balanced"])
                 cpu_curve = profile["cpu"]
                 gpu_curve = profile["gpu"]
 
@@ -829,9 +1091,10 @@ class FanController(QObject):
         else:
             self.status_changed.emit(f"CPU:{cpu}% GPU:{gpu}%")
 
-    def set_profile(self, profile_name):
+    def set_profile(self, profile_name, curve_data=None):
         self.mode = "profile"
         self.profile_name = profile_name
+        self.custom_curve_data = curve_data  # None for built-in profiles
         self.log(f"Profile changed to {profile_name}")
         # Reset hysteresis state to apply new profile immediately
         self.last_cpu_speed = 0
@@ -1159,7 +1422,58 @@ class FanControlGUI(QMainWindow):
         power_layout.addStretch()
         tabs.addTab(power_tab, "Power")
 
-        # Tab 4: EC Auto
+        # Tab 4: Custom Curves
+        custom_tab = QWidget()
+        custom_layout = QVBoxLayout(custom_tab)
+
+        # Curve selection and buttons
+        select_layout = QHBoxLayout()
+        select_layout.addWidget(QLabel("Curve:"))
+        self.custom_combo = QComboBox()
+        self.custom_combo.setMinimumWidth(120)
+        select_layout.addWidget(self.custom_combo)
+
+        btn_new = QPushButton("New")
+        btn_new.clicked.connect(self.new_custom_curve)
+        select_layout.addWidget(btn_new)
+
+        btn_edit = QPushButton("Edit")
+        btn_edit.clicked.connect(self.edit_custom_curve)
+        select_layout.addWidget(btn_edit)
+
+        btn_delete = QPushButton("Delete")
+        btn_delete.clicked.connect(self.delete_custom_curve)
+        select_layout.addWidget(btn_delete)
+
+        select_layout.addStretch()
+        custom_layout.addLayout(select_layout)
+
+        # Preview area
+        preview_layout = QHBoxLayout()
+        self.cpu_preview = CurveWidget("CPU Preview", [])
+        self.gpu_preview = CurveWidget("GPU Preview", [])
+        preview_layout.addWidget(self.cpu_preview)
+        preview_layout.addWidget(self.gpu_preview)
+        custom_layout.addLayout(preview_layout)
+
+        # Apply button
+        apply_layout = QHBoxLayout()
+        apply_layout.addStretch()
+        btn_apply = QPushButton("Apply Selected Curve")
+        btn_apply.setMinimumWidth(150)
+        btn_apply.clicked.connect(self.apply_custom_curve)
+        apply_layout.addWidget(btn_apply)
+        apply_layout.addStretch()
+        custom_layout.addLayout(apply_layout)
+
+        custom_layout.addStretch()
+        tabs.addTab(custom_tab, "Custom")
+
+        # Connect combo change to preview update
+        self.custom_combo.currentIndexChanged.connect(self.preview_custom_curve)
+        self.refresh_custom_list()
+
+        # Tab 5: EC Auto
         auto_tab = QWidget()
         auto_layout = QVBoxLayout(auto_tab)
         auto_desc = QLabel("Let the embedded controller (EC) manage the fans.\n\n"
@@ -1349,7 +1663,18 @@ class FanControlGUI(QMainWindow):
             self.gpu_slider.setValue(self.cpu_slider.value())
 
     def set_profile(self, name):
-        threading.Thread(target=self.controller.set_profile, args=(name,), daemon=True).start()
+        # Check if it's a custom curve
+        if name.startswith("Custom:"):
+            custom_name = name[7:]  # Remove "Custom:" prefix
+            curves = self.load_custom_curves()
+            curve_data = curves.get(custom_name)
+            if curve_data:
+                threading.Thread(target=self.controller.set_profile, args=(name, curve_data), daemon=True).start()
+            else:
+                # Fallback to Balanced if custom curve not found
+                threading.Thread(target=self.controller.set_profile, args=("Balanced", None), daemon=True).start()
+        else:
+            threading.Thread(target=self.controller.set_profile, args=(name, None), daemon=True).start()
 
     def show_curve_menu(self, pos, profile_name, button):
         """Show context menu with option to view curve"""
@@ -1515,6 +1840,108 @@ X-GNOME-Autostart-enabled=true
         import subprocess
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(["xdg-open", str(LOG_DIR)])
+
+    # Custom curves management
+    def load_custom_curves(self):
+        """Load custom curves from QSettings"""
+        data = self.settings.value("custom_curves", "{}")
+        try:
+            return json.loads(data) if isinstance(data, str) else {}
+        except:
+            return {}
+
+    def save_custom_curves(self, curves):
+        """Save custom curves to QSettings"""
+        self.settings.setValue("custom_curves", json.dumps(curves))
+
+    def refresh_custom_list(self):
+        """Refresh combo box with custom curves"""
+        self.custom_combo.blockSignals(True)
+        self.custom_combo.clear()
+        curves = self.load_custom_curves()
+        self.custom_combo.addItems(curves.keys())
+        self.custom_combo.blockSignals(False)
+        if curves:
+            self.preview_custom_curve(0)
+
+    def preview_custom_curve(self, index):
+        """Update preview widgets with selected curve"""
+        name = self.custom_combo.currentText()
+        curves = self.load_custom_curves()
+        if name in curves:
+            curve = curves[name]
+            # Update preview widgets
+            self.cpu_preview.curve_data = curve.get("cpu", [])
+            self.cpu_preview.profile_name = f"{name} (CPU)"
+            self.cpu_preview.update()
+            self.gpu_preview.curve_data = curve.get("gpu", [])
+            self.gpu_preview.profile_name = f"{name} (GPU)"
+            self.gpu_preview.update()
+
+    def new_custom_curve(self):
+        """Open dialog to create new curve"""
+        dialog = CustomCurveDialog("", None, self)
+        if dialog.exec_() == QDialog.Accepted:
+            data = dialog.get_curve_data()
+            if not data["name"]:
+                QMessageBox.warning(self, "Error", "Please enter a curve name.")
+                return
+            curves = self.load_custom_curves()
+            curves[data["name"]] = {"cpu": data["cpu"], "gpu": data["gpu"]}
+            self.save_custom_curves(curves)
+            self.refresh_custom_list()
+            # Select the new curve
+            idx = self.custom_combo.findText(data["name"])
+            if idx >= 0:
+                self.custom_combo.setCurrentIndex(idx)
+
+    def edit_custom_curve(self):
+        """Edit selected custom curve"""
+        name = self.custom_combo.currentText()
+        if not name:
+            return
+        curves = self.load_custom_curves()
+        if name not in curves:
+            return
+        dialog = CustomCurveDialog(name, curves[name], self)
+        if dialog.exec_() == QDialog.Accepted:
+            data = dialog.get_curve_data()
+            if not data["name"]:
+                QMessageBox.warning(self, "Error", "Please enter a curve name.")
+                return
+            # Remove old name if renamed
+            if data["name"] != name:
+                del curves[name]
+            curves[data["name"]] = {"cpu": data["cpu"], "gpu": data["gpu"]}
+            self.save_custom_curves(curves)
+            self.refresh_custom_list()
+            # Select the edited curve
+            idx = self.custom_combo.findText(data["name"])
+            if idx >= 0:
+                self.custom_combo.setCurrentIndex(idx)
+
+    def delete_custom_curve(self):
+        """Delete selected custom curve"""
+        name = self.custom_combo.currentText()
+        if not name:
+            return
+        reply = QMessageBox.question(self, "Delete Curve",
+                                     f"Delete curve '{name}'?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            curves = self.load_custom_curves()
+            if name in curves:
+                del curves[name]
+                self.save_custom_curves(curves)
+                self.refresh_custom_list()
+
+    def apply_custom_curve(self):
+        """Apply selected custom curve as active profile"""
+        name = self.custom_combo.currentText()
+        if not name:
+            QMessageBox.warning(self, "Error", "No custom curve selected.")
+            return
+        self.set_profile(f"Custom:{name}")
 
 
 def main():
