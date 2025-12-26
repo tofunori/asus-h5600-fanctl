@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox,
                              QGroupBox, QRadioButton, QSystemTrayIcon, QMenu, QAction,
                              QComboBox, QTabWidget, QSpinBox, QGridLayout, QDialog, QToolTip,
-                             QLineEdit, QMessageBox)
+                             QLineEdit, QMessageBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QSettings, QPointF
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QPainterPath, QBrush
 
@@ -428,14 +428,15 @@ class CurveEditorWidget(QWidget):
         self.selected_point = None
         self.hover_point = None
         self.dragging = False
-        self.setFixedSize(220, 200)
+        self.setMinimumSize(250, 250)
         self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # Drawing margins
-        self.left_margin = 35
+        self.left_margin = 40
         self.right_margin = 15
         self.top_margin = 25
-        self.bottom_margin = 30
+        self.bottom_margin = 40
 
     def get_draw_area(self):
         """Return drawing area dimensions"""
@@ -501,13 +502,17 @@ class CurveEditorWidget(QWidget):
 
         # Axis labels
         painter.setPen(QPen(text_color))
-        painter.setFont(QFont("Cantarell", 7))
+        painter.setFont(QFont("Cantarell", 8))
         for i in range(5):
             y = self.top_margin + h - (i * h / 4)
-            painter.drawText(2, int(y) + 3, f"{i * 25}%")
+            painter.drawText(2, int(y) + 4, f"{i * 25}%")
         for i, temp in enumerate([0, 20, 40, 60, 80, 100]):
             x = self.left_margin + (i * w / 5)
-            painter.drawText(int(x) - 8, self.top_margin + h + 12, f"{temp}°")
+            painter.drawText(int(x) - 10, self.top_margin + h + 15, f"{temp}°")
+
+        # X-axis title
+        painter.setFont(QFont("Cantarell", 8))
+        painter.drawText(self.left_margin + w // 2 - 25, self.top_margin + h + 32, "Temp (°C)")
 
         # Curve path
         if len(self.curve_data) >= 2:
@@ -576,12 +581,19 @@ class CurveEditorWidget(QWidget):
                 if t == temp and f == fan:
                     self.selected_point = i
                     break
+            # Show tooltip while dragging
+            QToolTip.showText(event.globalPos(), f"{temp}°C → {fan}% fan")
             self.update()
         else:
             # Hover effect
             idx = self.find_point_at(event.pos())
             if idx != self.hover_point:
                 self.hover_point = idx
+                if idx is not None:
+                    temp, fan = self.curve_data[idx]
+                    QToolTip.showText(event.globalPos(), f"{temp}°C → {fan}% fan")
+                else:
+                    QToolTip.hideText()
                 self.update()
 
     def mouseReleaseEvent(self, event):
@@ -608,7 +620,8 @@ class CustomCurveDialog(QDialog):
     def __init__(self, curve_name="", curve_data=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Custom Curve")
-        self.setFixedSize(500, 320)
+        self.setMinimumSize(550, 400)
+        self.resize(600, 450)
 
         if curve_data is None:
             curve_data = {
@@ -687,7 +700,7 @@ class AboutDialog(QDialog):
         layout.addWidget(title)
 
         # Version
-        version = QLabel("Version 1.4")
+        version = QLabel("Version 1.5")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
 
