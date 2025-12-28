@@ -999,6 +999,10 @@ class FanController(QObject):
             gpu_raw = int(gpu_hex, 16) if gpu_hex.startswith('0x') else 0
             gpu_duty = gpu_raw * 100 // 255
 
+            # Update cpu_percent/gpu_percent with real values (for tray animation)
+            self.cpu_percent = cpu_duty
+            self.gpu_percent = gpu_duty
+
             self.fan_duty_changed.emit(cpu_duty, gpu_duty)
         except Exception as e:
             pass
@@ -1063,6 +1067,10 @@ class FanController(QObject):
                 gpu_speed, self.last_gpu_temp = self.get_fan_speed_with_hysteresis(
                     self.gpu_temp, self.last_gpu_temp, self.last_gpu_speed, gpu_curve)
                 self.last_gpu_speed = gpu_speed
+
+                # Update cpu_percent/gpu_percent for tray icon animation
+                self.cpu_percent = cpu_speed
+                self.gpu_percent = gpu_speed
 
                 self.enable_manual()
                 self.set_fans(cpu_speed, gpu_speed)
@@ -1166,6 +1174,7 @@ class FanControlGUI(QMainWindow):
 
         self.init_ui()
         self.init_tray()
+        self.start_tray_animation()
         self.setup_sleep_detection()
         self.controller.fan_duty_changed.connect(self.update_fan_gauges)
         self.controller.temp_warning.connect(self.show_temp_warning)
@@ -1508,17 +1517,85 @@ class FanControlGUI(QMainWindow):
         warning.setStyleSheet("color: orange;")
         layout.addWidget(warning)
 
-    def create_tray_icon(self):
+    def create_tray_icon(self, rotation=0):
+        """Create a turbine-style fan icon (Style 2) with rotation."""
+        from math import cos, sin, radians, pi
+
         pixmap = QPixmap(32, 32)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
-        painter.setBrush(QColor("#0066cc"))
-        painter.setPen(QColor("#003366"))
-        painter.drawEllipse(2, 2, 28, 28)
-        painter.setBrush(QColor("white"))
-        painter.drawEllipse(12, 12, 8, 8)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        center = 16
+        outer_radius = 14
+        inner_radius = 4
+        num_blades = 12
+
+        # Outer circle (white ring)
+        painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(center - outer_radius, center - outer_radius,
+                           outer_radius * 2, outer_radius * 2)
+
+        # Draw curved blades
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#FFFFFF"))
+
+        for i in range(num_blades):
+            base_angle = (360 / num_blades) * i + rotation
+            path = QPainterPath()
+
+            # Blade: curved arc from inner to outer radius
+            a1 = radians(base_angle)
+            a2 = radians(base_angle + 20)  # Curve amount
+
+            # Inner point
+            ix = center + inner_radius * cos(a1)
+            iy = center + inner_radius * sin(a1)
+
+            # Outer points (curved blade)
+            ox1 = center + outer_radius * 0.85 * cos(a1 + 0.15)
+            oy1 = center + outer_radius * 0.85 * sin(a1 + 0.15)
+            ox2 = center + outer_radius * 0.85 * cos(a2)
+            oy2 = center + outer_radius * 0.85 * sin(a2)
+
+            # Inner end point
+            ix2 = center + inner_radius * cos(a2 - 0.1)
+            iy2 = center + inner_radius * sin(a2 - 0.1)
+
+            path.moveTo(ix, iy)
+            path.quadTo(ox1, oy1, ox2, oy2)
+            path.lineTo(ix2, iy2)
+            path.closeSubpath()
+
+            painter.drawPath(path)
+
+        # Center hole (dark)
+        painter.setBrush(QColor("#000000"))
+        painter.drawEllipse(center - inner_radius, center - inner_radius,
+                           inner_radius * 2, inner_radius * 2)
+
+        # Small center dot
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawEllipse(center - 2, center - 2, 4, 4)
+
         painter.end()
         return QIcon(pixmap)
+
+    def start_tray_animation(self):
+        """Start the tray icon rotation animation."""
+        self.tray_rotation = 0
+        self.tray_animation_timer = QTimer(self)
+        self.tray_animation_timer.timeout.connect(self.update_tray_rotation)
+        self.tray_animation_timer.start(50)  # 20 FPS
+
+    def update_tray_rotation(self):
+        """Update tray icon rotation based on CPU fan speed."""
+        # Speed: 0% fan = no rotation, 100% fan = 15 degrees per frame
+        fan_percent = getattr(self.controller, 'cpu_percent', 50)
+        rotation_speed = max(1, int(fan_percent * 0.15))  # 1-15 degrees per frame
+        self.tray_rotation = (self.tray_rotation + rotation_speed) % 360
+        self.tray_icon.setIcon(self.create_tray_icon(self.tray_rotation))
 
     def init_tray(self):
         self.tray_icon = QSystemTrayIcon(self)
