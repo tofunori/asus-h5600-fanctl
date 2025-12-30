@@ -1083,6 +1083,8 @@ class FanController(QObject):
                 time.sleep(0.5)  # Profile mode can be slower
 
             else:  # auto mode
+                # Keep calling disable_manual to ensure EC has control
+                self.disable_manual()
                 # Verbose log every ~5 seconds
                 log_counter += 1
                 if log_counter >= 5:
