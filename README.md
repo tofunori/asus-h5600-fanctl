@@ -42,7 +42,7 @@ cd asus-h5600-fanctl
 ```
 
 The install script automatically:
-- Detects your distribution (Fedora, Ubuntu/Debian, Arch)
+- Detects your distribution (Fedora, Ubuntu/Debian/Pop!_OS, Arch)
 - Installs dependencies
 - Compiles acpi_call module (from source on Fedora)
 - Configures module to load at boot
@@ -65,8 +65,8 @@ echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/$USER
 # Fedora
 sudo dnf install dkms kernel-devel python3-qt5 python3-dbus git
 
-# Ubuntu/Debian
-sudo apt install acpi-call-dkms python3-pyqt5 python3-dbus git
+# Ubuntu/Debian/Pop!_OS
+sudo apt install acpi-call-dkms python3-pyqt5 python3-dbus python3-dbus.mainloop.pyqt5 git
 
 # Arch
 sudo pacman -S acpi_call python-pyqt5 python-dbus git

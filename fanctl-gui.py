@@ -857,6 +857,7 @@ class FanController(QObject):
         super().__init__()
         self.running = True
         self.mode = "auto"  # auto, manual, profile
+        self.manual_lock = threading.Lock()
         self.profile_name = "Balanced"
         self.cpu_percent = 50
         self.gpu_percent = 50
@@ -954,8 +955,9 @@ class FanController(QObject):
             self.cpu_temp = 0
 
         try:
-            with open('/sys/class/hwmon/hwmon5/temp1_input', 'r') as f:
-                self.gpu_temp = int(f.read().strip()) // 1000
+            result = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader'],
+                                    capture_output=True, text=True, timeout=2)
+            self.gpu_temp = int(result.stdout.strip())
         except:
             self.gpu_temp = 0
 
@@ -998,10 +1000,6 @@ class FanController(QObject):
             gpu_hex = result.stdout.replace(b'\x00', b'').decode().strip()
             gpu_raw = int(gpu_hex, 16) if gpu_hex.startswith('0x') else 0
             gpu_duty = gpu_raw * 100 // 255
-
-            # Update cpu_percent/gpu_percent with real values (for tray animation)
-            self.cpu_percent = cpu_duty
-            self.gpu_percent = gpu_duty
 
             self.fan_duty_changed.emit(cpu_duty, gpu_duty)
         except Exception as e:
@@ -1098,19 +1096,24 @@ class FanController(QObject):
             self.control_thread.start()
 
     def set_manual(self, cpu, gpu):
-        self.mode = "manual"
-        self.cpu_percent = cpu
-        self.gpu_percent = gpu
-        self.log(f"Manual mode: CPU={cpu}% GPU={gpu}%")
-        self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
-        self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 0' | sudo tee /proc/acpi/call > /dev/null")
-        time.sleep(0.3)
-        self.start_control()
+        if not self.manual_lock.acquire(blocking=False):
+            return  # Skip if already processing
+        try:
+            self.mode = "manual"
+            self.cpu_percent = cpu
+            self.gpu_percent = gpu
+            self.log(f"Manual mode: CPU={cpu}% GPU={gpu}%")
+            # Apply immediately instead of waiting for control loop
+            self.enable_manual()
+            self.set_fans(cpu, gpu)
+            self.start_control()
 
-        if cpu == gpu:
-            self.status_changed.emit(f"Manuel - {cpu}%")
-        else:
-            self.status_changed.emit(f"CPU:{cpu}% GPU:{gpu}%")
+            if cpu == gpu:
+                self.status_changed.emit(f"Manuel - {cpu}%")
+            else:
+                self.status_changed.emit(f"CPU:{cpu}% GPU:{gpu}%")
+        finally:
+            self.manual_lock.release()
 
     def set_profile(self, profile_name, curve_data=None):
         self.mode = "profile"
