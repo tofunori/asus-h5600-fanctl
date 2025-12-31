@@ -16,6 +16,9 @@ disable_manual_mode() {
     # Désactiver mode manuel (retour auto)
     echo "\\_SB.ATKD.CWAP 0x00110013 0" | sudo tee /proc/acpi/call > /dev/null
     echo "\\_SB.ATKD.CWAP 0x00110014 0" | sudo tee /proc/acpi/call > /dev/null
+    # Reset EC registers to return control to EC
+    echo "\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x10 0x00" | sudo tee /proc/acpi/call > /dev/null
+    echo "\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x30 0x30" | sudo tee /proc/acpi/call > /dev/null
 }
 
 set_fans() {

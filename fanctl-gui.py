@@ -940,6 +940,9 @@ class FanController(QObject):
     def disable_manual(self):
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110013 0' | sudo tee /proc/acpi/call > /dev/null")
         self.run_cmd("echo '\\_SB.ATKD.CWAP 0x00110014 0' | sudo tee /proc/acpi/call > /dev/null")
+        # Reset EC registers to return control to EC
+        self.run_cmd("echo '\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x10 0x00' | sudo tee /proc/acpi/call > /dev/null")
+        self.run_cmd("echo '\\_SB.PCI0.SBRG.EC0.WRAM 0xCD 0x30 0x30' | sudo tee /proc/acpi/call > /dev/null")
 
     def set_fans(self, cpu_pct, gpu_pct):
         cpu_hex = hex(int(cpu_pct * 255 / 100))
